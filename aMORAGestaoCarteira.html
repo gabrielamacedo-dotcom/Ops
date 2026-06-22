@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>aMORA · Gestão de Carteira</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body { background: #EDF1F4; margin: 0; padding: 0; }
+  * { -webkit-font-smoothing: antialiased; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0D1F30; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .scroll-soft::-webkit-scrollbar { height: 8px; width: 8px; }
+  .scroll-soft::-webkit-scrollbar-thumb { background: #DDE5EC; border-radius: 8px; }
+  input, select, textarea { outline: none; }
+  @media print {
+    .no-print { display: none !important; }
+    body, html { background: #FFFFFF !important; }
+    .print-block { box-shadow: none !important; border: 1px solid #DDE5EC !important; break-inside: avoid; }
+    .print-full { width: 100% !important; max-width: 100% !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ============================ THEME ============================ */
+const C = {
+  bg: "#EDF1F4", card: "#FFFFFF", ink: "#0D1F30", muted: "#5B7080", subtle: "#8FA3B1",
+  line: "#DDE5EC", petrol: "#0D4B5E", petrolDark: "#083545", petrolLight: "#E7F2F5",
+  amber: "#CC7D1E", amberLight: "#FEF2E0", green: "#1E8A50", greenLight: "#E3F5EB",
+  yellow: "#B68A0A", yellowLight: "#FDF8E1", red: "#BC3726", redLight: "#FDECE9",
+};
+
+/* ============================ OPTIONS ============================ */
+const CANAIS = ["QA", "Corretor", "Direto"];
+const STATUS_IMOVEL = ["Disponível", "Proposta aceita", "Contrato em assinatura", "Vendido", "Em reforma"];
+const STATUS_PROPOSTA = ["Em negociação", "Aceita", "Recusada", "Convertida em venda"];
+const INTERESSE = ["Alto", "Médio", "Baixo", "Nenhum"];
+const MOTIVO_PERDA = ["Preço", "Crédito", "Concorrência", "Cliente desistiu", "Outros"];
+const STATUS_CORRETOR = ["Ativo", "Morno", "Inativo", "Novo"];
+
+/* ============================ HELPERS ============================ */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const fmtBRL = n => (Number(n)||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0});
+const parseDate = s => s ? new Date(s+"T00:00:00") : null;
+const todayDate = () => { const d=new Date(); d.setHours(0,0,0,0); return d; };
+const daysBetween = (a,b) => (a&&b) ? Math.floor((a-b)/86400000) : null;
+const monthsBetween = (end,start) => (end&&start) ? (end.getFullYear()*12+end.getMonth())-(start.getFullYear()*12+start.getMonth()) : null;
+const ymOf = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+const sameYM = (s,ym) => { const d=parseDate(s); return d?ymOf(d)===ym:false; };
+const monthLabel = ym => { const [y,m]=ym.split("-").map(Number); return new Date(y,m-1,1).toLocaleDateString("pt-BR",{month:"long",year:"numeric"}); };
+const shiftYM = (ym,delta) => { const [y,m]=ym.split("-").map(Number); return ymOf(new Date(y,m-1+delta,1)); };
+const quarterOf = m0 => m0<=2?"Q1":m0<=5?"Q2":m0<=8?"Q3":"Q4";
+const refOf = ym => { const [y,m]=ym.split("-").map(Number); const end=new Date(y,m,0); end.setHours(0,0,0,0); const t=todayDate(); return end>t?t:end; };
+const startOf = ym => { const [y,m]=ym.split("-").map(Number); return new Date(y,m-1,1); };
+const mono = "ui-monospace, 'SF Mono', 'Cascadia Code', monospace";
+
+/* ============================ STORAGE ============================ */
+const VER = "v5";
+const KEYS = {
+  imoveis: `amora:${VER}:imoveis`,
+  visitas: `amora:${VER}:visitas`,
+  propostas: `amora:${VER}:propostas`,
+  corretores: `amora:${VER}:corretores`,
+  config: `amora:${VER}:config`,
+};
+const loadLS = (k,fb) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):fb; } catch { return fb; } };
+const saveLS = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} };
+
+/* ============================ SEED ============================ */
+function makeSeed() {
+  const corMap = {}, corretores = [];
+  const getCor = (nome, regiao) => {
+    if (!nome) return "";
+    if (!corMap[nome]) {
+      const c = { id: uid(), nome, whatsapp: "", regiao: regiao||"", especialidade: "", ultimoContato: "2026-05-25", statusRelacionamento: "Ativo" };
+      corMap[nome] = c; corretores.push(c);
+    }
+    return corMap[nome].id;
+  };
+  const P = [
+    ["Condomínio Pegasus", "Vila Mariana", "Zona Sul", "Disponível", "2025-02-15", 720000, 3200, "", "", [["2026-05-20","Corretor","C"],["2026-05-12","QA",""]], "Karla Gonçalves"],
+    ["Vivere Vila Matilde", "Vila Matilde", "Zona Leste", "Disponível", "2025-07-15", 480000, 2400, "", "", [["2026-05-06","QA",""],["2026-05-19","QA",""]], "Fabiana Fernandes da Silva"],
+    ["Duo Morumbi", "Morumbi", "Zona Oeste", "Proposta aceita", "2025-07-15", 950000, 4200, "2026-05-26", "", [["2026-05-10","Corretor","C"],["2026-05-14","Corretor","C"],["2026-05-21","QA",""]], "Victor Fornasiero de Paiva"],
+    ["You Pateo Santa Cruz", "Santa Cruz", "Zona Sul", "Disponível", "2025-08-15", 530000, 2600, "", "", [["2026-05-16","QA",""]], "Ricardo Giovannetti Franklin"],
+    ["Vivacittà", "Tatuapé", "Zona Leste", "Disponível", "2025-10-15", 610000, 2900, "", "", [["2026-05-11","QA",""]], "Vitor Augusto Zanoni"],
+    ["Família Freguesia do Ó", "Freguesia do Ó", "Zona Norte", "Disponível", "2025-02-15", 440000, 2200, "", "", [["2026-05-05","QA",""],["2026-05-18","QA",""]], "Paulo Roberto Da Conceição Junior"],
+    ["Clube Jaçanã", "Jaçanã", "Zona Norte", "Disponível", "2025-06-15", 390000, 1900, "", "", [["2026-05-12","Corretor","C"],["2026-05-22","QA",""]], "Letícia Boldrini Nogueira"],
+    ["Camboriú", "Camboriú", "Litoral", "Disponível", "2026-02-01", 700000, 3000, "", "", [], "Dennis Pellegrini Ferreira"],
+    ["Portal de Guarulhos", "Guarulhos", "Guarulhos", "Disponível", "2025-09-15", 350000, 1700, "", "", [["2026-05-09","QA",""],["2026-05-23","QA",""]], "Robson Dos Santos Correa"],
+    ["Le Corbusier", "Vila Clementino", "Zona Sul", "Proposta aceita", "2025-05-15", 880000, 3900, "2026-05-25", "", [["2026-05-07","Corretor","C"],["2026-05-13","Corretor","C"],["2026-05-17","Corretor","C"],["2026-05-24","Corretor","C"],["2026-05-09","QA",""],["2026-05-22","QA",""]], "Marcia Marques"],
+    ["Villa Amalfi", "Santana", "Zona Norte", "Disponível", "2026-04-15", 760000, 3400, "", "", [], "Vanessa Cremasco"],
+    ["Vivence Condomínio Club", "Interlagos", "Zona Sul", "Disponível", "2025-09-15", 540000, 2700, "", "", [["2026-04-20","Corretor","C"]], "Douglas da Conceição"],
+    ["Ed. Genova", "Bela Vista", "Centro", "Disponível", "2025-08-15", 690000, 3100, "", "", [], "Fernanda Castro"],
+    ["Cond. Royal Point - 98m²", "Pinheiros", "Zona Oeste", "Disponível", "2026-01-28", 1100000, 4800, "", "", [["2026-04-25","Corretor","C"]], "Gisele Macedo"],
+    ["Cond. Ritmos da Barra - 34m²", "Barra Funda", "Centro", "Disponível", "2025-09-15", 320000, 1600, "", "", [["2026-05-14","QA",""]], "Sandui Neto"],
+    ["Lume - Alto da Boa Vista", "Alto da Boa Vista", "Zona Sul", "Disponível", "2025-12-15", 820000, 3700, "", "", [["2026-05-19","Corretor","C"],["2026-05-28","QA",""]], "Layo Vinicyus Alves Pereira"],
+    ["Cond. Moema Advanced Home", "Moema", "Zona Sul", "Disponível", "2026-02-15", 1250000, 5200, "", "", [["2026-04-05","QA",""]], "Derby Nero Neto"],
+    ["Town House Village Morumbi", "Morumbi", "Zona Oeste", "Vendido", "2026-03-01", 990000, 4300, "2026-03-25", "2026-05-15", [], ""],
+    ["Residencial Família Vila Ema - 58m²", "Vila Ema", "Zona Leste", "Vendido", "2026-01-10", 470000, 2300, "2026-03-20", "2026-05-10", [], ""],
+    ["Márcia Maria / Triunfo", "Triunfo", "Outros", "Vendido", "2025-10-01", 380000, 1800, "2026-02-15", "2026-05-20", [], ""],
+  ];
+  const imoveis = [], visitas = [];
+  P.forEach((row, i) => {
+    const [nome, bairro, regiao, status, disp, valor, carrego, comp, des, vis, negocio] = row;
+    const corId = getCor(negocio, regiao);
+    const id = uid();
+    imoveis.push({ id, codigo: `AM-${String(101+i).padStart(4,"0")}`, nome, bairro, regiao, dataDisponibilizacao: disp, valorAnunciado: valor, valorMinimo: Math.round(valor*0.93), corretorId: corId, canalPrincipal: "QA", status, dataPropostaAceita: comp, dataVenda: des, carregoMensal: carrego, observacoes: "" });
+    vis.forEach(([d,canal,who]) => visitas.push({ id: uid(), imovelId: id, data: d, corretorId: who==="C"?corId:"", cliente: "—", canalOrigem: canal, qualificada: true, checkin: true, feedback: "", interesse: "Médio", proximoPasso: "" }));
+  });
+  const byNome = n => imoveis.find(x => x.nome===n)?.id;
+  const propostas = [
+    { id: uid(), imovelId: byNome("Le Corbusier"), data: "2026-05-25", valorOfertado: 850000, valorAprovado: 855000, canal: "Corretor", corretorId: corMap["Marcia Marques"]?.id||"", status: "Aceita", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Duo Morumbi"), data: "2026-05-26", valorOfertado: 905000, valorAprovado: 910000, canal: "QA", corretorId: corMap["Victor Fornasiero de Paiva"]?.id||"", status: "Aceita", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-19", valorOfertado: 790000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-28", valorOfertado: 800000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Condomínio Pegasus"), data: "2026-05-20", valorOfertado: 690000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("You Pateo Santa Cruz"), data: "2026-05-16", valorOfertado: 505000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Clube Jaçanã"), data: "2026-05-22", valorOfertado: 372000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+  ];
+  return { imoveis, visitas, propostas, corretores };
+}
+
+/* ============================ CALC ============================ */
+function calcImovel(im, visitas, propostas, ref, ym) {
+  const disp = parseDate(im.dataDisponibilizacao);
+  const desembolso = parseDate(im.dataVenda);
+  const compromisso = parseDate(im.dataPropostaAceita);
+  const fimMercado = desembolso || ref;
+  const mercadoDias = (disp && fimMercado) ? Math.floor((fimMercado - disp)/86400000) : 0;
+  const mercadoMeses = monthsBetween(fimMercado, disp) || 0;
+  const carregoAcum = Math.round(im.carregoMensal * (mercadoDias/30));
+  const visIm = visitas.filter(v => v.imovelId === im.id);
+  const propIm = propostas.filter(p => p.imovelId === im.id);
+  const visMes = visIm.filter(v => sameYM(v.data, ym)).length;
+  const propMes = propIm.filter(p => sameYM(p.data, ym)).length;
+  const ultVisita = visIm.length ? new Date(Math.max(...visIm.map(v => parseDate(v.data)))) : null;
+  const ultProp = propIm.length ? new Date(Math.max(...propIm.map(p => parseDate(p.data)))) : null;
+  const diasSemVisita = daysBetween(ref, ultVisita || disp);
+  const diasSemProposta = daysBetween(ref, ultProp || disp);
+  const disponivel = im.status === "Disponível";
+  let saude = "neutro";
+  if (disponivel) {
+    if (diasSemVisita > 60) saude = "vermelho";
+    else if (diasSemVisita > 30) saude = "amarelo";
+    else saude = "verde";
+  }
+  const necessitaDisparo = disponivel && diasSemVisita > 30;
+  const necessitaRevisao = disponivel && diasSemProposta > 45;
+  const atencaoMaxima = disponivel && (diasSemVisita > 60 || diasSemProposta > 60);
+  const temCompromisso = !!compromisso;
+  let bonusVenda = 0, bonusDias = null, bonusMeses = null;
+  if (compromisso && disp) {
+    bonusDias = Math.floor((compromisso - disp)/86400000);
+    bonusMeses = monthsBetween(compromisso, disp);
+    if (bonusDias < 90) bonusVenda = 2000;
+    else if (bonusDias <= 180) bonusVenda = 1500;
+    else if (bonusDias <= 365) bonusVenda = 1000;
+    else bonusVenda = 500;
+  }
+  return { mercadoMeses, mercadoDias, carregoAcum, diasSemVisita, diasSemProposta, visMes, propMes, saude, necessitaDisparo, necessitaRevisao, atencaoMaxima, bonusVenda, bonusDias, bonusMeses, temCompromisso };
+}
+
+function calcMetas(imoveis, visitas, propostas, config, ref, ym) {
+  const estoque = imoveis.filter(i => i.status === "Disponível").length;
+  const metaVisitas = estoque * 3;
+  const visMes = visitas.filter(v => sameYM(v.data, ym));
+  const visitasRealizadas = visMes.length;
+  const porCanal = { QA: 0, Corretor: 0, Direto: 0 };
+  visMes.forEach(v => { if (porCanal[v.canalOrigem] !== undefined) porCanal[v.canalOrigem]++; });
+  const foraQA = visMes.filter(v => v.canalOrigem !== "QA").length;
+  const pctFora = visitasRealizadas ? Math.round(foraQA/visitasRealizadas*100) : 0;
+  const propMes = propostas.filter(p => sameYM(p.data, ym));
+  const propostasRecebidas = propMes.length;
+  const metaPropostas = Math.ceil(visitasRealizadas * 0.12);
+  const compromissosMes = imoveis.filter(i => sameYM(i.dataPropostaAceita, ym));
+  const vendasMes = compromissosMes.length;
+  const desembolsosMes = imoveis.filter(i => sameYM(i.dataVenda, ym)).length;
+  const trimestre = quarterOf(Number(ym.split("-")[1])-1);
+  const metaVendas = trimestre === "Q2" ? 3 : trimestre === "Q3" ? 4 : 3;
+  const semVisita30 = imoveis.filter(i => {
+    if (i.status !== "Disponível") return false;
+    const calc = calcImovel(i, visitas, propostas, ref, ym);
+    return calc.diasSemVisita > 30;
+  }).length;
+  const okVisitas = metaVisitas > 0 && visitasRealizadas >= metaVisitas;
+  const okCanais = pctFora >= 30;
+  const okConversao = metaPropostas > 0 && propostasRecebidas >= metaPropostas;
+  const okSaude = semVisita30 === 0;
+  const okVendas = vendasMes >= metaVendas;
+  const custoCalc = imoveis.filter(i => i.status !== "Vendido").reduce((s,i) => s + (i.carregoMensal||0), 0);
+  const budget = Number(config.budgetMes)||0;
+  let multiplicador = 1;
+  if (budget > 0) {
+    if (custoCalc <= budget) multiplicador = 1;
+    else if (custoCalc <= budget * 1.2) multiplicador = 0.5;
+    else multiplicador = 0;
+  }
+  const bonusVendasMes = compromissosMes.reduce((s,i) => s + calcImovel(i, visitas, propostas, ref, ym).bonusVenda, 0);
+  const mesPrograma = Number(config.mesPrograma)||1;
+  const itensFunil = [
+    { label: "Visitas", detalhe: `${visitasRealizadas} / meta ${metaVisitas}`, ok: okVisitas },
+    { label: "Canais (% fora QA)", detalhe: `${pctFora}% / meta 30%`, ok: okCanais },
+    { label: "Conversão V→P", detalhe: `${propostasRecebidas} propostas / meta ${metaPropostas}`, ok: okConversao },
+    { label: "Saúde (30d+)", detalhe: `${semVisita30} imóveis s/ visita > 30d`, ok: okSaude },
+  ];
+  let bonusFunil = 0;
+  if (mesPrograma <= 2) {
+    bonusFunil = itensFunil.reduce((s,it) => s + (it.ok ? 500 : 0), 0);
+  } else {
+    bonusFunil = itensFunil.every(it => it.ok) ? 2000 : 0;
+  }
+  const bonusTotal = Math.round((bonusVendasMes + bonusFunil) * multiplicador);
+  const disponiveis = imoveis.filter(i => i.status === "Disponível");
+  const tempoMedio = disponiveis.length
+    ? Math.round(disponiveis.reduce((s,i) => s + (calcImovel(i, visitas, propostas, ref, ym).mercadoMeses || 0), 0) / disponiveis.length * 10) / 10
+    : 0;
+  const convVP = visitasRealizadas ? Math.round(propostasRecebidas/visitasRealizadas*100) : 0;
+  const ativos = imoveis.filter(i => i.status !== "Vendido");
+  const propAndamentoIds = new Set(propostas.filter(p => p.status === "Em negociação" && parseDate(p.data) <= ref).map(p => p.imovelId));
+  const contratoAssinado = ativos.filter(i => i.dataPropostaAceita);
+  const propostaAndamento = ativos.filter(i => !i.dataPropostaAceita && propAndamentoIds.has(i.id));
+  const emReforma = ativos.filter(i => i.status === "Em reforma");
+  const aVenda = ativos.filter(i => !i.dataPropostaAceita && !propAndamentoIds.has(i.id) && i.status !== "Em reforma");
+  const desembolsados = imoveis.filter(i => i.status === "Vendido");
+  const faixas = [
+    { label: "Até 3m", min: -1, max: 3, color: "#1E8A50" },
+    { label: "3 – 6m", min: 3, max: 6, color: "#E8921A" },
+    { label: "6 – 9m", min: 6, max: 9, color: "#D06010" },
+    { label: "9 – 12m", min: 9, max: 12, color: "#C04010" },
+    { label: "12m+", min: 12, max: 9999, color: "#BC3726" },
+  ];
+  const faixasCounts = faixas.map(f => ({
+    ...f,
+    count: ativos.filter(i => {
+      const m = calcImovel(i, visitas, propostas, ref, ym).mercadoMeses;
+      return m > f.min && m <= f.max;
+    }).length,
+  }));
+  return {
+    estoque, metaVisitas, visitasRealizadas, porCanal, foraQA, pctFora,
+    propostasRecebidas, metaPropostas, compromissosMes, vendasMes, desembolsosMes,
+    trimestre, metaVendas, semVisita30, okVisitas, okCanais, okConversao, okSaude, okVendas,
+    custoCalc, budget, multiplicador, bonusVendasMes, mesPrograma, itensFunil, bonusFunil, bonusTotal,
+    tempoMedio, convVP, ativos, contratoAssinado, propostaAndamento, aVenda, emReforma, desembolsados, faixasCounts,
+  };
+}
+
+/* ============================ DEFAULTS ============================ */
+function defaults(type) {
+  const t = todayDate().toISOString().slice(0,10);
+  if (type==="imovel") return { codigo:"", nome:"", bairro:"", regiao:"", dataDisponibilizacao:t, valorAnunciado:0, valorMinimo:0, corretorId:"", canalPrincipal:"QA", status:"Disponível", dataPropostaAceita:"", dataVenda:"", carregoMensal:0, observacoes:"" };
+  if (type==="visita") return { data:t, imovelId:"", corretorId:"", cliente:"", canalOrigem:"QA", qualificada:false, checkin:false, feedback:"", interesse:"Médio", proximoPasso:"" };
+  if (type==="proposta") return { data:t, imovelId:"", valorOfertado:0, valorAprovado:0, canal:"QA", corretorId:"", status:"Em negociação", motivoPerda:"" };
+  return { nome:"", whatsapp:"", regiao:"", especialidade:"", ultimoContato:t, statusRelacionamento:"Novo" };
+}
+
+/* ============================ ICONS ============================ */
+const Ic = {
+  dash: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>,
+  alert: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  home: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 9.5 12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>,
+  eye: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>,
+  doc: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>,
+  users: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  target: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
+  report: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="7"/><rect x="12" y="7" width="3" height="11"/><rect x="17" y="13" width="3" height="5"/></svg>,
+  plus: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  edit: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>,
+  trash: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+  x: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  chevL: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="15 18 9 12 15 6"/></svg>,
+  chevR: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="9 18 15 12 9 6"/></svg>,
+  wa: (p) => <svg viewBox="0 0 24 24" fill="currentColor" {...p}><path d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.82 11.82 0 0 1 8.413 3.488 11.82 11.82 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.51 5.26l-.999 3.648 3.978-1.607zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>,
+  copy: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+  print: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+  search: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  reset: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>,
+  download: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+};
+
+/* ============================ PRIMITIVES ============================ */
+function Badge({ children, bg, fg }) {
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: bg, color: fg }}>{children}</span>;
+}
+function statusImovelBadge(s) {
+  const map = {
+    "Disponível": [C.petrolLight, C.petrol],
+    "Proposta aceita": [C.greenLight, C.green],
+    "Contrato em assinatura": [C.amberLight, C.amber],
+    "Vendido": ["#E4E9EE", C.muted],
+    "Em reforma": [C.yellowLight, C.yellow],
+  };
+  const [bg,fg] = map[s] || ["#E4E9EE", C.muted];
+  return <Badge bg={bg} fg={fg}>{s}</Badge>;
+}
+function statusPropostaBadge(s) {
+  const map = {
+    "Em negociação": [C.amberLight, C.amber],
+    "Aceita": [C.greenLight, C.green],
+    "Recusada": [C.redLight, C.red],
+    "Convertida em venda": [C.petrolLight, C.petrol],
+  };
+  const [bg,fg] = map[s] || ["#E4E9EE", C.muted];
+  return <Badge bg={bg} fg={fg}>{s}</Badge>;
+}
+function corretorBadge(s) {
+  const map = {
+    "Ativo": [C.greenLight, C.green],
+    "Morno": [C.yellowLight, C.yellow],
+    "Inativo": [C.redLight, C.red],
+    "Novo": [C.petrolLight, C.petrol],
+  };
+  const [bg,fg] = map[s] || ["#E4E9EE", C.muted];
+  return <Badge bg={bg} fg={fg}>{s}</Badge>;
+}
+function saudeColor(s) {
+  return s==="verde" ? C.green : s==="amarelo" ? C.yellow : s==="vermelho" ? C.red : C.subtle;
+}
+function Dot({ color }) { return <span className="inline-block rounded-full" style={{ width:9, height:9, background:color }} />; }
+
+function Btn({ children, onClick, variant="primary", size="md", className="", type="button", disabled }) {
+  const base = "inline-flex items-center justify-center gap-1.5 font-semibold rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+  const sizes = { sm: "text-[12px] px-2.5 py-1.5", md: "text-[13px] px-3.5 py-2", lg: "text-sm px-4 py-2.5" };
+  const styles = {
+    primary: { background: C.petrol, color: "#fff" },
+    dark: { background: C.petrolDark, color: "#fff" },
+    soft: { background: C.petrolLight, color: C.petrol },
+    ghost: { background: "transparent", color: C.muted, border: `1px solid ${C.line}` },
+    danger: { background: C.redLight, color: C.red },
+  };
+  return <button type={type} disabled={disabled} onClick={onClick} className={`${base} ${sizes[size]} ${className}`} style={styles[variant]}>{children}</button>;
+}
+
+function Card({ children, className="", style={} }) {
+  return <div className={`rounded-2xl print-block ${className}`} style={{ background: C.card, border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(13,31,48,.04)", ...style }}>{children}</div>;
+}
+
+function StatCard({ label, value, sub, accent=C.petrol, semaphore }) {
+  return (
+    <Card className="p-4 relative overflow-hidden">
+      <div className="absolute left-0 top-0 bottom-0" style={{ width:4, background: semaphore || accent }} />
+      <div className="pl-2">
+        <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: C.subtle }}>{label}</div>
+        <div className="text-2xl font-bold mt-1 tabular" style={{ color: C.ink }}>{value}</div>
+        {sub && <div className="text-[12px] mt-1" style={{ color: C.muted }}>{sub}</div>}
+      </div>
+    </Card>
+  );
+}
+
+function Field({ label, children, required }) {
+  return (
+    <label className="block">
+      <span className="text-[12px] font-semibold" style={{ color: C.muted }}>{label}{required && <span style={{color:C.red}}> *</span>}</span>
+      <div className="mt-1">{children}</div>
+    </label>
+  );
+}
+const inputCls = "w-full rounded-lg px-3 py-2 text-[13px]";
+const inputStyle = { border:`1px solid ${C.line}`, background:"#FBFCFD", color:C.ink };
+
+function TInput(props) { return <input {...props} className={inputCls} style={inputStyle} />; }
+function TSelect({ children, ...p }) { return <select {...p} className={inputCls} style={inputStyle}>{children}</select>; }
+function TArea(props) { return <textarea {...props} rows={3} className={inputCls} style={inputStyle} />; }
+
+function EmptyState({ icon, title, hint }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-14 text-center">
+      <div className="w-12 h-12 rounded-full flex items-center justify-center mb-3" style={{ background: C.petrolLight, color: C.petrol }}>{icon}</div>
+      <div className="font-semibold" style={{ color: C.ink }}>{title}</div>
+      {hint && <div className="text-[13px] mt-1 max-w-sm" style={{ color: C.muted }}>{hint}</div>}
+    </div>
+  );
+}
+
+function ProgressBar({ value, max, color }) {
+  const pct = max>0 ? Math.min(100, Math.round(value/max*100)) : 0;
+  return (
+    <div className="w-full rounded-full h-2.5 overflow-hidden" style={{ background: C.line }}>
+      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+/* ============================ FORM MODAL ============================ */
+function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
+  const [data, setData] = useState(() => ({ ...(initial || defaults(type)) }));
+  const [err, setErr] = useState({});
+  const set = (k,v) => setData(d => ({ ...d, [k]:v }));
+  const titles = { imovel:"Imóvel", visita:"Visita", proposta:"Proposta", corretor:"Corretor" };
+  const isEdit = !!(initial && initial.id);
+
+  function validate() {
+    const e = {};
+    if (type==="imovel") {
+      if (!data.nome?.trim()) e.nome = true;
+      if (!data.dataDisponibilizacao) e.dataDisponibilizacao = true;
+      if (!(Number(data.valorAnunciado)>0)) e.valorAnunciado = true;
+    } else if (type==="visita") {
+      if (!data.imovelId) e.imovelId = true;
+      if (!data.data) e.data = true;
+    } else if (type==="proposta") {
+      if (!data.imovelId) e.imovelId = true;
+      if (!data.data) e.data = true;
+      if (!(Number(data.valorOfertado)>0)) e.valorOfertado = true;
+    } else {
+      if (!data.nome?.trim()) e.nome = true;
+    }
+    setErr(e);
+    return Object.keys(e).length === 0;
+  }
+  function submit() {
+    if (!validate()) return;
+    const out = { ...data };
+    if (!out.id) out.id = uid();
+    ["valorAnunciado","valorMinimo","carregoMensal","valorOfertado","valorAprovado"].forEach(k => { if (k in out) out[k] = Number(out[k])||0; });
+    onSave(out);
+  }
+  const errStyle = k => err[k] ? { ...inputStyle, border:`1px solid ${C.red}` } : inputStyle;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-4" style={{ background:"rgba(8,53,69,.45)" }} onClick={onClose}>
+      <div className="w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto scroll-soft" style={{ background:C.card }} onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 sticky top-0 z-10" style={{ background:C.card, borderBottom:`1px solid ${C.line}` }}>
+          <h3 className="text-lg font-bold" style={{ color:C.ink }}>{isEdit?"Editar":"Novo"} {titles[type]}</h3>
+          <button onClick={onClose} style={{ color:C.muted }}><Ic.x width={20} height={20}/></button>
+        </div>
+        <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {type==="imovel" && <>
+            <Field label="Código"><input value={data.codigo} onChange={e=>set("codigo",e.target.value)} className={inputCls} style={inputStyle} placeholder="AM-0000"/></Field>
+            <Field label="Nome" required><input value={data.nome} onChange={e=>set("nome",e.target.value)} className={inputCls} style={errStyle("nome")} /></Field>
+            <Field label="Bairro"><input value={data.bairro} onChange={e=>set("bairro",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Região"><input value={data.regiao} onChange={e=>set("regiao",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Data de disponibilização" required><input type="date" value={data.dataDisponibilizacao} onChange={e=>set("dataDisponibilizacao",e.target.value)} className={inputCls} style={errStyle("dataDisponibilizacao")}/></Field>
+            <Field label="Carrego mensal (R$)"><input type="number" value={data.carregoMensal} onChange={e=>set("carregoMensal",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Valor anunciado (R$)" required><input type="number" value={data.valorAnunciado} onChange={e=>set("valorAnunciado",e.target.value)} className={inputCls} style={errStyle("valorAnunciado")}/></Field>
+            <Field label="Valor mínimo (R$)"><input type="number" value={data.valorMinimo} onChange={e=>set("valorMinimo",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Corretor de negócio"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
+            <Field label="Canal principal"><TSelect value={data.canalPrincipal} onChange={e=>set("canalPrincipal",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Status"><TSelect value={data.status} onChange={e=>set("status",e.target.value)}>{STATUS_IMOVEL.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Data proposta aceita"><input type="date" value={data.dataPropostaAceita} onChange={e=>set("dataPropostaAceita",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Data de venda (desembolso)"><input type="date" value={data.dataVenda} onChange={e=>set("dataVenda",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <div className="md:col-span-2"><Field label="Observações"><TArea value={data.observacoes} onChange={e=>set("observacoes",e.target.value)}/></Field></div>
+          </>}
+          {type==="visita" && <>
+            <Field label="Imóvel" required><TSelect value={data.imovelId} onChange={e=>set("imovelId",e.target.value)} style={errStyle("imovelId")}><option value="">Selecione…</option>{imoveis.map(i=><option key={i.id} value={i.id}>{i.nome}</option>)}</TSelect></Field>
+            <Field label="Data" required><input type="date" value={data.data} onChange={e=>set("data",e.target.value)} className={inputCls} style={errStyle("data")}/></Field>
+            <Field label="Cliente"><input value={data.cliente} onChange={e=>set("cliente",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Canal de origem"><TSelect value={data.canalOrigem} onChange={e=>set("canalOrigem",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Corretor"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
+            <Field label="Interesse"><TSelect value={data.interesse} onChange={e=>set("interesse",e.target.value)}>{INTERESSE.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <div className="flex items-center gap-5 md:col-span-2">
+              <label className="flex items-center gap-2 text-[13px] font-medium" style={{color:C.muted}}><input type="checkbox" checked={data.qualificada} onChange={e=>set("qualificada",e.target.checked)} /> Qualificada</label>
+              <label className="flex items-center gap-2 text-[13px] font-medium" style={{color:C.muted}}><input type="checkbox" checked={data.checkin} onChange={e=>set("checkin",e.target.checked)} /> Check-in realizado</label>
+            </div>
+            <div className="md:col-span-2"><Field label="Feedback"><TArea value={data.feedback} onChange={e=>set("feedback",e.target.value)}/></Field></div>
+            <div className="md:col-span-2"><Field label="Próximo passo"><input value={data.proximoPasso} onChange={e=>set("proximoPasso",e.target.value)} className={inputCls} style={inputStyle}/></Field></div>
+          </>}
+          {type==="proposta" && <>
+            <Field label="Imóvel" required><TSelect value={data.imovelId} onChange={e=>set("imovelId",e.target.value)} style={errStyle("imovelId")}><option value="">Selecione…</option>{imoveis.map(i=><option key={i.id} value={i.id}>{i.nome}</option>)}</TSelect></Field>
+            <Field label="Data" required><input type="date" value={data.data} onChange={e=>set("data",e.target.value)} className={inputCls} style={errStyle("data")}/></Field>
+            <Field label="Valor ofertado (R$)" required><input type="number" value={data.valorOfertado} onChange={e=>set("valorOfertado",e.target.value)} className={inputCls} style={errStyle("valorOfertado")}/></Field>
+            <Field label="Valor aprovado (R$)"><input type="number" value={data.valorAprovado} onChange={e=>set("valorAprovado",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Canal"><TSelect value={data.canal} onChange={e=>set("canal",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Corretor"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
+            <Field label="Status"><TSelect value={data.status} onChange={e=>set("status",e.target.value)}>{STATUS_PROPOSTA.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Motivo da perda"><TSelect value={data.motivoPerda} onChange={e=>set("motivoPerda",e.target.value)}><option value="">—</option>{MOTIVO_PERDA.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+          </>}
+          {type==="corretor" && <>
+            <Field label="Nome" required><input value={data.nome} onChange={e=>set("nome",e.target.value)} className={inputCls} style={errStyle("nome")}/></Field>
+            <Field label="WhatsApp"><input value={data.whatsapp} onChange={e=>set("whatsapp",e.target.value)} className={inputCls} style={inputStyle} placeholder="(11) 90000-0000"/></Field>
+            <Field label="Região"><input value={data.regiao} onChange={e=>set("regiao",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Especialidade"><input value={data.especialidade} onChange={e=>set("especialidade",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Último contato"><input type="date" value={data.ultimoContato} onChange={e=>set("ultimoContato",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Status do relacionamento"><TSelect value={data.statusRelacionamento} onChange={e=>set("statusRelacionamento",e.target.value)}>{STATUS_CORRETOR.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+          </>}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 sticky bottom-0" style={{ background:C.card, borderTop:`1px solid ${C.line}` }}>
+          <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
+          <Btn onClick={submit}>{isEdit?"Salvar alterações":"Adicionar"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ MONTH NAV ============================ */
+function MonthNav({ ym, setYm }) {
+  const next = shiftYM(ym, 1);
+  const canForward = startOf(next) <= todayDate();
+  return (
+    <div className="flex items-center gap-1 rounded-xl px-1 py-1" style={{ background:C.card, border:`1px solid ${C.line}` }}>
+      <button onClick={()=>setYm(shiftYM(ym,-1))} className="p-1.5 rounded-lg hover:bg-black/5" style={{ color:C.muted }}><Ic.chevL width={18} height={18}/></button>
+      <span className="text-[13px] font-semibold px-2 capitalize min-w-[130px] text-center" style={{ color:C.ink }}>{monthLabel(ym)}</span>
+      <button onClick={()=>canForward && setYm(next)} disabled={!canForward} className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed" style={{ color:C.muted }}><Ic.chevR width={18} height={18}/></button>
+    </div>
+  );
+}
+
+/* ============================ PAINEL ============================ */
+function PainelScreen({ imoveis, visitas, propostas, corretores, ref, ym }) {
+  const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, {}, ref, ym), [imoveis,visitas,propostas,ref,ym]);
+  const maxFaixa = Math.max(1, ...M.faixasCounts.map(f=>f.count));
+  const totalVis = M.porCanal.QA + M.porCanal.Corretor + M.porCanal.Direto;
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Estoque ativo" value={M.estoque} sub={`${imoveis.length} imóveis no total`} accent={C.petrol} />
+        <StatCard label="Visitas no mês" value={M.visitasRealizadas} sub={`meta ${M.metaVisitas}`} semaphore={M.okVisitas?C.green:C.amber} />
+        <StatCard label="Propostas no mês" value={M.propostasRecebidas} sub={`conversão ${M.convVP}% V→P`} semaphore={M.okConversao?C.green:C.amber} />
+        <StatCard label="Vendas no mês" value={M.vendasMes} sub={`meta ${M.metaVendas} · ${M.trimestre}`} semaphore={M.okVendas?C.green:C.amber} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <Card className="p-5 lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold" style={{color:C.ink}}>Tempo em carteira (imóveis ativos)</h3>
+            <span className="text-[12px]" style={{color:C.muted}}>tempo médio {M.tempoMedio} meses</span>
+          </div>
+          <div className="space-y-3">
+            {M.faixasCounts.map(f => (
+              <div key={f.label} className="flex items-center gap-3">
+                <span className="text-[12px] font-semibold w-16 text-right" style={{color:C.muted}}>{f.label}</span>
+                <div className="flex-1 rounded-full h-6 overflow-hidden flex items-center" style={{ background:C.bg }}>
+                  <div className="h-full rounded-full flex items-center justify-end pr-2 transition-all" style={{ width:`${Math.max(6, f.count/maxFaixa*100)}%`, background:f.color }}>
+                    {f.count>0 && <span className="text-[11px] font-bold text-white tabular">{f.count}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="font-bold mb-4" style={{color:C.ink}}>Origem das visitas</h3>
+          {totalVis === 0 ? <EmptyState icon={<Ic.eye width={20} height={20}/>} title="Sem visitas no mês" hint="Registre visitas para ver a distribuição por canal." /> : <>
+            <div className="flex rounded-full overflow-hidden h-3 mb-4" style={{background:C.bg}}>
+              <div style={{ width:`${M.porCanal.QA/totalVis*100}%`, background:C.petrol }} />
+              <div style={{ width:`${M.porCanal.Corretor/totalVis*100}%`, background:C.amber }} />
+              <div style={{ width:`${M.porCanal.Direto/totalVis*100}%`, background:C.green }} />
+            </div>
+            {[["QA",C.petrol],["Corretor",C.amber],["Direto",C.green]].map(([k,col])=>(
+              <div key={k} className="flex items-center justify-between py-1.5" style={{borderBottom:`1px solid ${C.line}`}}>
+                <span className="flex items-center gap-2 text-[13px]" style={{color:C.ink}}><Dot color={col}/>{k}</span>
+                <span className="text-[13px] font-semibold tabular" style={{color:C.muted}}>{M.porCanal[k]} ({totalVis?Math.round(M.porCanal[k]/totalVis*100):0}%)</span>
+              </div>
+            ))}
+            <div className="mt-3 text-[12px]" style={{color:M.okCanais?C.green:C.amber}}>
+              {M.pctFora}% fora do QA (meta 30%)
+            </div>
+          </>}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card className="p-5">
+          <h3 className="font-bold mb-4" style={{color:C.ink}}>Pipeline da carteira</h3>
+          {[
+            ["A venda", M.aVenda.length, C.petrol],
+            ["Proposta em andamento", M.propostaAndamento.length, C.amber],
+            ["Contrato assinado", M.contratoAssinado.length, C.green],
+            ["Em reforma", M.emReforma.length, C.yellow],
+            ["Desembolsados", M.desembolsados.length, C.muted],
+          ].map(([label,n,col])=>(
+            <div key={label} className="flex items-center justify-between py-2" style={{borderBottom:`1px solid ${C.line}`}}>
+              <span className="flex items-center gap-2 text-[13px]" style={{color:C.ink}}><Dot color={col}/>{label}</span>
+              <span className="text-lg font-bold tabular" style={{color:C.ink}}>{n}</span>
+            </div>
+          ))}
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="font-bold mb-3" style={{color:C.ink}}>Bônus estimado do mês</h3>
+          <div className="text-3xl font-bold tabular" style={{color:C.petrol}}>{fmtBRL(M.bonusTotal)}</div>
+          <div className="mt-3 space-y-1.5 text-[13px]">
+            <div className="flex justify-between"><span style={{color:C.muted}}>Bônus por vendas</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes)}</span></div>
+            <div className="flex justify-between"><span style={{color:C.muted}}>Bônus de funil</span><span className="font-semibold tabular">{fmtBRL(M.bonusFunil)}</span></div>
+            <div className="flex justify-between"><span style={{color:C.muted}}>Multiplicador de budget</span><span className="font-semibold tabular">{M.multiplicador}×</span></div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ REVISÃO ============================ */
+function RevisaoScreen({ imoveis, visitas, propostas, corretores, ref, ym, onEdit }) {
+  const corById = id => corretores.find(c=>c.id===id);
+  const rows = imoveis.filter(i=>i.status==="Disponível").map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
+  const disparo = rows.filter(r=>r.c.necessitaDisparo).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita);
+  const revisao = rows.filter(r=>r.c.necessitaRevisao).sort((a,b)=>b.c.diasSemProposta-a.c.diasSemProposta);
+  const atencao = rows.filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita);
+
+  function waMsg(im) {
+    const lo = fmtBRL(im.valorMinimo);
+    const hi = fmtBRL(im.valorAnunciado);
+    return `Olá! Temos uma oportunidade no ${im.nome}${im.bairro?` (${im.bairro})`:""}. Faixa de negociação entre ${lo} e ${hi}. Posso agendar uma visita com seu cliente?`;
+  }
+  function copyMsg(im) {
+    const txt = waMsg(im);
+    navigator.clipboard?.writeText(txt).catch(()=>{});
+  }
+  function waLink(im) {
+    const c = corById(im.corretorId);
+    const phone = (c?.whatsapp||"").replace(/\D/g,"");
+    const base = phone ? `https://wa.me/55${phone}` : `https://wa.me/`;
+    return `${base}?text=${encodeURIComponent(waMsg(im))}`;
+  }
+
+  function Section({ title, list, color, kind }) {
+    return (
+      <Card className="p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Dot color={color}/>
+          <h3 className="font-bold" style={{color:C.ink}}>{title}</h3>
+          <Badge bg={C.bg} fg={C.muted}>{list.length}</Badge>
+        </div>
+        {list.length===0 ? <EmptyState icon={<Ic.target width={20} height={20}/>} title="Tudo em dia" hint="Nenhum imóvel nesta condição agora." /> :
+        <div className="space-y-3">
+          {list.map(({im,c})=>{
+            const cor = corById(im.corretorId);
+            return (
+              <div key={im.id} className="rounded-xl p-3.5" style={{ border:`1px solid ${C.line}`, background:"#FBFCFD" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate" style={{color:C.ink}}>{im.nome}</div>
+                    <div className="text-[12px]" style={{color:C.muted}}>{im.bairro} · {im.regiao} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
+                  </div>
+                  <button onClick={()=>onEdit(im)} className="p-1.5 rounded-lg hover:bg-black/5 shrink-0" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                </div>
+                <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12px]" style={{color:C.muted}}>
+                  <span>{kind==="revisao" ? `Sem proposta há ${c.diasSemProposta}d` : `Sem visita há ${c.diasSemVisita}d`}</span>
+                  <span>Mercado: {c.mercadoMeses}m</span>
+                  <span>Carrego acum.: {fmtBRL(c.carregoAcum)}</span>
+                  <span>Faixa: {fmtBRL(im.valorMinimo)} – {fmtBRL(im.valorAnunciado)}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <a href={waLink(im)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.greenLight, color:C.green}}><Ic.wa width={14} height={14}/> {cor?`WhatsApp ${cor.nome.split(" ")[0]}`:"WhatsApp"}</a>
+                  <button onClick={()=>copyMsg(im)} className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.petrolLight, color:C.petrol}}><Ic.copy width={14} height={14}/> Copiar mensagem</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>}
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="p-4" style={{ background:C.petrolLight, border:`1px solid ${C.petrol}33` }}>
+        <div className="flex items-start gap-3">
+          <Ic.alert width={20} height={20} style={{color:C.petrol}} />
+          <div className="text-[13px]" style={{color:C.petrolDark}}>
+            <b>Rotina de revisão.</b> Disparo de leads quando passa de 30 dias sem visita. Revisão de preço quando passa de 45 dias sem proposta. Atenção máxima acima de 60 dias.
+          </div>
+        </div>
+      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+        <Section title="Necessita disparo (>30d sem visita)" list={disparo} color={C.yellow} kind="disparo" />
+        <Section title="Necessita revisão de preço (>45d sem proposta)" list={revisao} color={C.amber} kind="revisao" />
+        <Section title="Atenção máxima (>60d)" list={atencao} color={C.red} kind="disparo" />
+      </div>
+    </div>
+  );
+}
+
+/* ============================ IMÓVEIS ============================ */
+function ImoveisScreen({ imoveis, visitas, propostas, corretores, ref, ym, onNew, onEdit, onDelete }) {
+  const [q, setQ] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fRegiao, setFRegiao] = useState("");
+  const corById = id => corretores.find(c=>c.id===id);
+  const regioes = [...new Set(imoveis.map(i=>i.regiao).filter(Boolean))].sort();
+  const list = imoveis.filter(i=>{
+    if (fStatus && i.status!==fStatus) return false;
+    if (fRegiao && i.regiao!==fRegiao) return false;
+    if (q) { const s=(i.nome+" "+i.bairro+" "+i.codigo).toLowerCase(); if(!s.includes(q.toLowerCase())) return false; }
+    return true;
+  }).map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1">
+          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome, bairro ou código…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+        </div>
+        <TSelect value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos os status</option>{STATUS_IMOVEL.map(x=><option key={x}>{x}</option>)}</TSelect>
+        <TSelect value={fRegiao} onChange={e=>setFRegiao(e.target.value)}><option value="">Todas as regiões</option>{regioes.map(x=><option key={x}>{x}</option>)}</TSelect>
+        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Novo imóvel</Btn>
+      </div>
+
+      <Card className="overflow-hidden">
+        {list.length===0 ? <EmptyState icon={<Ic.home width={20} height={20}/>} title="Nenhum imóvel encontrado" hint="Ajuste os filtros ou cadastre um novo imóvel." /> :
+        <div className="overflow-x-auto scroll-soft">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr style={{ background:C.bg, color:C.subtle }} className="text-left text-[11px] uppercase tracking-wide">
+                <th className="px-4 py-3 font-semibold">Imóvel</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold text-right">Anunciado</th>
+                <th className="px-4 py-3 font-semibold text-center">Mercado</th>
+                <th className="px-4 py-3 font-semibold text-right">Carrego acum.</th>
+                <th className="px-4 py-3 font-semibold text-center">Saúde</th>
+                <th className="px-4 py-3 font-semibold">Corretor</th>
+                <th className="px-4 py-3 font-semibold text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map(({im,c})=>{
+                const cor = corById(im.corretorId);
+                return (
+                  <tr key={im.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
+                    <td className="px-4 py-3">
+                      <div className="font-semibold" style={{color:C.ink}}>{im.nome}</div>
+                      <div className="text-[12px]" style={{color:C.muted}}>{im.bairro} · {im.regiao} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
+                    </td>
+                    <td className="px-4 py-3">{statusImovelBadge(im.status)}</td>
+                    <td className="px-4 py-3 text-right tabular font-semibold">{fmtBRL(im.valorAnunciado)}</td>
+                    <td className="px-4 py-3 text-center tabular" style={{color:C.muted}}>{c.mercadoMeses}m</td>
+                    <td className="px-4 py-3 text-right tabular" style={{color:C.muted}}>{fmtBRL(c.carregoAcum)}</td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="inline-flex flex-col items-center gap-0.5">
+                        <Dot color={saudeColor(c.saude)} />
+                        {im.status==="Disponível" && <span className="text-[10px] tabular" style={{color:C.subtle}}>{c.diasSemVisita}d</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{cor?cor.nome:"—"}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={()=>onEdit(im)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                        <button onClick={()=>onDelete(im.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ VISITAS ============================ */
+function VisitasScreen({ imoveis, visitas, corretores, onNew, onEdit, onDelete }) {
+  const [q, setQ] = useState("");
+  const imById = id => imoveis.find(i=>i.id===id);
+  const corById = id => corretores.find(c=>c.id===id);
+  const list = [...visitas].sort((a,b)=>parseDate(b.data)-parseDate(a.data)).filter(v=>{
+    if(!q) return true;
+    const im = imById(v.imovelId);
+    const s = ((im?.nome||"")+" "+(v.cliente||"")+" "+v.canalOrigem).toLowerCase();
+    return s.includes(q.toLowerCase());
+  });
+  const interesseColor = i => i==="Alto"?C.green:i==="Médio"?C.yellow:i==="Baixo"?C.amber:C.subtle;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1">
+          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por imóvel, cliente ou canal…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+        </div>
+        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Nova visita</Btn>
+      </div>
+      <Card className="overflow-hidden">
+        {list.length===0 ? <EmptyState icon={<Ic.eye width={20} height={20}/>} title="Nenhuma visita registrada" hint="Registre as visitas para acompanhar o funil." /> :
+        <div className="overflow-x-auto scroll-soft">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr style={{ background:C.bg, color:C.subtle }} className="text-left text-[11px] uppercase tracking-wide">
+                <th className="px-4 py-3 font-semibold">Data</th>
+                <th className="px-4 py-3 font-semibold">Imóvel</th>
+                <th className="px-4 py-3 font-semibold">Cliente</th>
+                <th className="px-4 py-3 font-semibold">Canal</th>
+                <th className="px-4 py-3 font-semibold text-center">Qual.</th>
+                <th className="px-4 py-3 font-semibold text-center">Interesse</th>
+                <th className="px-4 py-3 font-semibold">Corretor</th>
+                <th className="px-4 py-3 font-semibold text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map(v=>{
+                const im = imById(v.imovelId); const cor = corById(v.corretorId);
+                return (
+                  <tr key={v.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
+                    <td className="px-4 py-3 tabular" style={{color:C.muted}}>{parseDate(v.data)?.toLocaleDateString("pt-BR")}</td>
+                    <td className="px-4 py-3 font-semibold" style={{color:C.ink}}>{im?im.nome:"—"}</td>
+                    <td className="px-4 py-3" style={{color:C.muted}}>{v.cliente||"—"}</td>
+                    <td className="px-4 py-3"><Badge bg={C.petrolLight} fg={C.petrol}>{v.canalOrigem}</Badge></td>
+                    <td className="px-4 py-3 text-center">{v.qualificada?<span style={{color:C.green}}>✓</span>:<span style={{color:C.subtle}}>—</span>}</td>
+                    <td className="px-4 py-3 text-center"><span className="inline-flex items-center gap-1.5 text-[12px]" style={{color:C.muted}}><Dot color={interesseColor(v.interesse)}/>{v.interesse}</span></td>
+                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{cor?cor.nome:"—"}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={()=>onEdit(v)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                        <button onClick={()=>onDelete(v.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ PROPOSTAS ============================ */
+function PropostasScreen({ imoveis, propostas, corretores, onNew, onEdit, onDelete }) {
+  const [q, setQ] = useState("");
+  const imById = id => imoveis.find(i=>i.id===id);
+  const corById = id => corretores.find(c=>c.id===id);
+  const list = [...propostas].sort((a,b)=>parseDate(b.data)-parseDate(a.data)).filter(p=>{
+    if(!q) return true;
+    const im = imById(p.imovelId);
+    return ((im?.nome||"")+" "+p.status+" "+p.canal).toLowerCase().includes(q.toLowerCase());
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1">
+          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por imóvel, status ou canal…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+        </div>
+        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Nova proposta</Btn>
+      </div>
+      <Card className="overflow-hidden">
+        {list.length===0 ? <EmptyState icon={<Ic.doc width={20} height={20}/>} title="Nenhuma proposta registrada" hint="Cadastre propostas recebidas para acompanhar a negociação." /> :
+        <div className="overflow-x-auto scroll-soft">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr style={{ background:C.bg, color:C.subtle }} className="text-left text-[11px] uppercase tracking-wide">
+                <th className="px-4 py-3 font-semibold">Data</th>
+                <th className="px-4 py-3 font-semibold">Imóvel</th>
+                <th className="px-4 py-3 font-semibold text-right">Ofertado</th>
+                <th className="px-4 py-3 font-semibold text-right">Aprovado</th>
+                <th className="px-4 py-3 font-semibold">Canal</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Motivo perda</th>
+                <th className="px-4 py-3 font-semibold text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map(p=>{
+                const im = imById(p.imovelId);
+                return (
+                  <tr key={p.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
+                    <td className="px-4 py-3 tabular" style={{color:C.muted}}>{parseDate(p.data)?.toLocaleDateString("pt-BR")}</td>
+                    <td className="px-4 py-3 font-semibold" style={{color:C.ink}}>{im?im.nome:"—"}</td>
+                    <td className="px-4 py-3 text-right tabular font-semibold">{fmtBRL(p.valorOfertado)}</td>
+                    <td className="px-4 py-3 text-right tabular" style={{color:C.muted}}>{p.valorAprovado?fmtBRL(p.valorAprovado):"—"}</td>
+                    <td className="px-4 py-3"><Badge bg={C.petrolLight} fg={C.petrol}>{p.canal}</Badge></td>
+                    <td className="px-4 py-3">{statusPropostaBadge(p.status)}</td>
+                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{p.motivoPerda||"—"}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={()=>onEdit(p)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                        <button onClick={()=>onDelete(p.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ CORRETORES ============================ */
+function CorretoresScreen({ corretores, imoveis, visitas, propostas, onNew, onEdit, onDelete }) {
+  const [q, setQ] = useState("");
+  const ranking = corretores.map(c=>{
+    const vis = visitas.filter(v=>v.corretorId===c.id).length;
+    const props = propostas.filter(p=>p.corretorId===c.id).length;
+    const aceitas = propostas.filter(p=>p.corretorId===c.id && (p.status==="Aceita"||p.status==="Convertida em venda")).length;
+    const imc = imoveis.filter(i=>i.corretorId===c.id).length;
+    const score = vis*1 + props*3 + aceitas*5;
+    return { c, vis, props, aceitas, imc, score };
+  }).sort((a,b)=>b.score-a.score);
+  const list = ranking.filter(r=> !q || (r.c.nome+" "+r.c.regiao+" "+r.c.especialidade).toLowerCase().includes(q.toLowerCase()));
+  const medals = ["🥇","🥈","🥉"];
+
+  function waLink(c) {
+    const phone=(c.whatsapp||"").replace(/\D/g,"");
+    return phone?`https://wa.me/55${phone}`:`https://wa.me/`;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative flex-1">
+          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar corretor…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+        </div>
+        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Novo corretor</Btn>
+      </div>
+      {list.length===0 ? <Card><EmptyState icon={<Ic.users width={20} height={20}/>} title="Nenhum corretor" hint="Cadastre corretores parceiros para acompanhar o relacionamento." /></Card> :
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {list.map((r, idx)=>(
+          <Card key={r.c.id} className="p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                {ranking.indexOf(r)<3 && r.score>0 && <span className="text-lg">{medals[ranking.indexOf(r)]}</span>}
+                <div className="min-w-0">
+                  <div className="font-bold truncate" style={{color:C.ink}}>{r.c.nome}</div>
+                  <div className="text-[12px]" style={{color:C.muted}}>{r.c.regiao||"—"}{r.c.especialidade?` · ${r.c.especialidade}`:""}</div>
+                </div>
+              </div>
+              {corretorBadge(r.c.statusRelacionamento)}
+            </div>
+            <div className="grid grid-cols-4 gap-2 mt-4 text-center">
+              {[["Imóveis",r.imc],["Visitas",r.vis],["Propostas",r.props],["Aceitas",r.aceitas]].map(([l,n])=>(
+                <div key={l} className="rounded-lg py-2" style={{background:C.bg}}>
+                  <div className="text-lg font-bold tabular" style={{color:C.ink}}>{n}</div>
+                  <div className="text-[10px] uppercase tracking-wide" style={{color:C.subtle}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between mt-3 text-[12px]" style={{color:C.muted}}>
+              <span>Último contato: {r.c.ultimoContato?parseDate(r.c.ultimoContato)?.toLocaleDateString("pt-BR"):"—"}</span>
+              <span className="font-semibold" style={{color:C.petrol}}>score {r.score}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <a href={waLink(r.c)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.greenLight, color:C.green}}><Ic.wa width={14} height={14}/> WhatsApp</a>
+              <div className="flex-1"/>
+              <button onClick={()=>onEdit(r.c)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+              <button onClick={()=>onDelete(r.c.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+            </div>
+          </Card>
+        ))}
+      </div>}
+    </div>
+  );
+}
+
+/* ============================ METAS ============================ */
+function MetasScreen({ imoveis, visitas, propostas, config, setConfig, ref, ym }) {
+  const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, config, ref, ym), [imoveis,visitas,propostas,config,ref,ym]);
+  const set = (k,v) => setConfig(c=>({ ...c, [k]:v }));
+  const budgetPct = M.budget>0 ? Math.round(M.custoCalc/M.budget*100) : 0;
+  const budgetColor = M.multiplicador===1?C.green:M.multiplicador===0.5?C.yellow:C.red;
+
+  return (
+    <div className="space-y-5">
+      <Card className="p-5">
+        <h3 className="font-bold mb-4" style={{color:C.ink}}>Configuração do programa</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Field label="Mês do programa"><TInput type="number" min="1" value={config.mesPrograma||1} onChange={e=>set("mesPrograma",e.target.value)} /></Field>
+          <Field label="Budget mensal de carrego (R$)"><TInput type="number" value={config.budgetMes||0} onChange={e=>set("budgetMes",e.target.value)} /></Field>
+          <div className="flex items-end">
+            <div className="text-[12px]" style={{color:C.muted}}>
+              {(M.mesPrograma<=2) ? "Ramp-up: bônus de funil por item cumprido (R$ 500 cada)." : "Maturidade: bônus de funil só com todos os itens cumpridos (R$ 2.000)."}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold" style={{color:C.ink}}>Carrego vs Budget</h3>
+          <Badge bg={`${budgetColor}1A`} fg={budgetColor}>multiplicador {M.multiplicador}×</Badge>
+        </div>
+        <div className="flex items-end justify-between mb-2">
+          <div><div className="text-[12px]" style={{color:C.subtle}}>Carrego mensal (ativos)</div><div className="text-2xl font-bold tabular" style={{color:C.ink}}>{fmtBRL(M.custoCalc)}</div></div>
+          <div className="text-right"><div className="text-[12px]" style={{color:C.subtle}}>Budget</div><div className="text-lg font-semibold tabular" style={{color:C.muted}}>{fmtBRL(M.budget)}</div></div>
+        </div>
+        <div className="w-full rounded-full h-4 overflow-hidden relative" style={{ background:C.line }}>
+          <div className="h-full rounded-full transition-all" style={{ width:`${Math.min(100,budgetPct)}%`, background:budgetColor }} />
+          {M.budget>0 && <div className="absolute top-0 bottom-0" style={{ left:"83.3%", width:2, background:C.muted }} title="120%" />}
+        </div>
+        <div className="flex justify-between mt-1.5 text-[11px]" style={{color:C.subtle}}>
+          <span>{budgetPct}% do budget</span>
+          <span>limite 120% (linha)</span>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card className="p-5">
+          <h3 className="font-bold mb-4" style={{color:C.ink}}>Itens do funil</h3>
+          <div className="space-y-3">
+            {M.itensFunil.map(it=>(
+              <div key={it.label} className="flex items-center justify-between rounded-xl p-3" style={{ border:`1px solid ${C.line}`, background:"#FBFCFD" }}>
+                <div>
+                  <div className="font-semibold text-[13px]" style={{color:C.ink}}>{it.label}</div>
+                  <div className="text-[12px]" style={{color:C.muted}}>{it.detalhe}</div>
+                </div>
+                <Badge bg={it.ok?C.greenLight:C.redLight} fg={it.ok?C.green:C.red}>{it.ok?"OK":"Pendente"}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="font-bold mb-4" style={{color:C.ink}}>Bônus do mês</h3>
+          <div className="space-y-3">
+            <div className="rounded-xl p-3" style={{background:C.petrolLight}}>
+              <div className="text-[12px]" style={{color:C.petrol}}>Bônus total estimado</div>
+              <div className="text-3xl font-bold tabular" style={{color:C.petrolDark}}>{fmtBRL(M.bonusTotal)}</div>
+            </div>
+            <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Bônus por vendas ({M.vendasMes})</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes)}</span></div>
+            <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Bônus de funil</span><span className="font-semibold tabular">{fmtBRL(M.bonusFunil)}</span></div>
+            <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Subtotal</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes+M.bonusFunil)}</span></div>
+            <div className="flex justify-between py-2 text-[13px]"><span style={{color:C.muted}}>Multiplicador de budget</span><span className="font-semibold tabular">× {M.multiplicador}</span></div>
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-5">
+        <h3 className="font-bold mb-4" style={{color:C.ink}}>Metas do mês</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {[
+            ["Visitas", M.visitasRealizadas, M.metaVisitas, M.okVisitas],
+            ["Propostas", M.propostasRecebidas, M.metaPropostas, M.okConversao],
+            ["Vendas", M.vendasMes, M.metaVendas, M.okVendas],
+            ["% fora QA", M.pctFora, 30, M.okCanais],
+          ].map(([l,val,max,ok])=>(
+            <div key={l}>
+              <div className="flex justify-between text-[13px] mb-1.5">
+                <span className="font-semibold" style={{color:C.ink}}>{l}</span>
+                <span className="tabular" style={{color:ok?C.green:C.amber}}>{val} / {max}</span>
+              </div>
+              <ProgressBar value={val} max={max} color={ok?C.green:C.amber} />
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ RELATÓRIO ============================ */
+function RelatorioScreen({ imoveis, visitas, propostas, corretores, config, ref, ym }) {
+  const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, config, ref, ym), [imoveis,visitas,propostas,config,ref,ym]);
+  const corById = id => corretores.find(c=>c.id===id);
+  const vendas = M.compromissosMes.map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
+  const destaques = imoveis.filter(i=>i.status==="Disponível").map(i=>({im:i,c:calcImovel(i,visitas,propostas,ref,ym)})).filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita).slice(0,5);
+
+  return (
+    <div className="space-y-5 print-full">
+      <div className="flex items-center justify-between no-print">
+        <h3 className="font-bold text-lg" style={{color:C.ink}}>Relatório mensal · <span className="capitalize">{monthLabel(ym)}</span></h3>
+        <Btn variant="dark" onClick={()=>window.print()}><Ic.print width={16} height={16}/> Imprimir / PDF</Btn>
+      </div>
+
+      <Card className="p-6">
+        <div className="flex items-center justify-between pb-4 mb-4" style={{borderBottom:`2px solid ${C.petrol}`}}>
+          <div>
+            <div className="text-2xl font-bold" style={{color:C.petrol}}>aMORA</div>
+            <div className="text-[13px]" style={{color:C.muted}}>Relatório de gestão de carteira</div>
+          </div>
+          <div className="text-right">
+            <div className="font-semibold capitalize" style={{color:C.ink}}>{monthLabel(ym)}</div>
+            <div className="text-[12px]" style={{color:C.muted}}>Ref. {ref.toLocaleDateString("pt-BR")}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          {[
+            ["Estoque ativo", M.estoque],
+            ["Visitas no mês", `${M.visitasRealizadas} / ${M.metaVisitas}`],
+            ["Propostas", `${M.propostasRecebidas} / ${M.metaPropostas}`],
+            ["Vendas", `${M.vendasMes} / ${M.metaVendas}`],
+            ["Conversão V→P", `${M.convVP}%`],
+            ["% fora QA", `${M.pctFora}%`],
+            ["Tempo médio carteira", `${M.tempoMedio}m`],
+            ["Bônus estimado", fmtBRL(M.bonusTotal)],
+          ].map(([l,v])=>(
+            <div key={l} className="rounded-xl p-3" style={{background:C.bg}}>
+              <div className="text-[11px] uppercase tracking-wide" style={{color:C.subtle}}>{l}</div>
+              <div className="text-xl font-bold tabular mt-0.5" style={{color:C.ink}}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>Vendas / compromissos do mês</h4>
+        {vendas.length===0 ? <div className="text-[13px] mb-5" style={{color:C.muted}}>Nenhuma venda registrada no mês.</div> :
+        <table className="w-full text-[13px] mb-6">
+          <thead><tr style={{color:C.subtle}} className="text-left text-[11px] uppercase"><th className="py-2">Imóvel</th><th className="py-2 text-center">Tempo</th><th className="py-2 text-right">Anunciado</th><th className="py-2 text-right">Bônus</th></tr></thead>
+          <tbody>
+            {vendas.map(({im,c})=>(
+              <tr key={im.id} style={{borderTop:`1px solid ${C.line}`}}>
+                <td className="py-2 font-semibold">{im.nome}</td>
+                <td className="py-2 text-center tabular">{c.bonusMeses}m ({c.bonusDias}d)</td>
+                <td className="py-2 text-right tabular">{fmtBRL(im.valorAnunciado)}</td>
+                <td className="py-2 text-right tabular font-semibold" style={{color:C.green}}>{fmtBRL(c.bonusVenda)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>}
+
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>Distribuição do tempo em carteira</h4>
+        <div className="space-y-2 mb-6">
+          {M.faixasCounts.map(f=>(
+            <div key={f.label} className="flex items-center gap-3">
+              <span className="text-[12px] w-16 text-right" style={{color:C.muted}}>{f.label}</span>
+              <div className="flex-1 rounded-full h-5 overflow-hidden" style={{background:C.bg}}>
+                <div className="h-full rounded-full flex items-center justify-end pr-2" style={{ width:`${Math.max(4, f.count/Math.max(1,...M.faixasCounts.map(x=>x.count))*100)}%`, background:f.color }}>{f.count>0 && <span className="text-[10px] font-bold text-white">{f.count}</span>}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>{"Atenção máxima (>60d)"}</h4>
+        {destaques.length===0 ? <div className="text-[13px]" style={{color:C.muted}}>Nenhum imóvel em atenção máxima.</div> :
+        <ul className="space-y-1.5">
+          {destaques.map(({im,c})=>(
+            <li key={im.id} className="flex items-center justify-between text-[13px] rounded-lg px-3 py-2" style={{background:C.redLight}}>
+              <span className="font-semibold" style={{color:C.ink}}>{im.nome} <span className="font-normal" style={{color:C.muted}}>· {im.bairro}</span></span>
+              <span className="tabular" style={{color:C.red}}>{c.diasSemVisita}d s/ visita · {c.diasSemProposta}d s/ proposta</span>
+            </li>
+          ))}
+        </ul>}
+
+        <div className="mt-6 pt-4 text-[11px] text-center" style={{borderTop:`1px solid ${C.line}`, color:C.subtle}}>
+          Gerado em {new Date().toLocaleString("pt-BR")} · aMORA Gestão de Carteira
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ APP ============================ */
+function App() {
+  const [imoveis, setImoveis] = useState(()=>loadLS(KEYS.imoveis, null));
+  const [visitas, setVisitas] = useState(()=>loadLS(KEYS.visitas, null));
+  const [propostas, setPropostas] = useState(()=>loadLS(KEYS.propostas, null));
+  const [corretores, setCorretores] = useState(()=>loadLS(KEYS.corretores, null));
+  const [config, setConfig] = useState(()=>loadLS(KEYS.config, { mesPrograma:2, budgetMes:55000 }));
+
+  // seed once
+  useEffect(()=>{
+    if (imoveis===null || visitas===null || propostas===null || corretores===null) {
+      const s = makeSeed();
+      setImoveis(s.imoveis); setVisitas(s.visitas); setPropostas(s.propostas); setCorretores(s.corretores);
+    }
+  }, []);
+
+  const I = imoveis||[], V = visitas||[], P = propostas||[], Cor = corretores||[];
+
+  // persist
+  useEffect(()=>{ if(imoveis) saveLS(KEYS.imoveis, imoveis); }, [imoveis]);
+  useEffect(()=>{ if(visitas) saveLS(KEYS.visitas, visitas); }, [visitas]);
+  useEffect(()=>{ if(propostas) saveLS(KEYS.propostas, propostas); }, [propostas]);
+  useEffect(()=>{ if(corretores) saveLS(KEYS.corretores, corretores); }, [corretores]);
+  useEffect(()=>{ saveLS(KEYS.config, config); }, [config]);
+
+  const [tab, setTab] = useState("painel");
+  const [ym, setYm] = useState(()=>ymOf(todayDate()));
+  const ref = useMemo(()=>refOf(ym), [ym]);
+  const [modal, setModal] = useState(null); // { type, initial }
+
+  function upsert(type, item) {
+    const setter = { imovel:setImoveis, visita:setVisitas, proposta:setPropostas, corretor:setCorretores }[type];
+    setter(list => {
+      const arr = list||[];
+      const exists = arr.some(x=>x.id===item.id);
+      return exists ? arr.map(x=>x.id===item.id?item:x) : [...arr, item];
+    });
+    setModal(null);
+  }
+  function remove(type, id) {
+    if (!window.confirm("Confirmar exclusão deste registro?")) return;
+    if (type==="imovel") {
+      setImoveis(l=>l.filter(x=>x.id!==id));
+      setVisitas(l=>l.filter(x=>x.imovelId!==id));
+      setPropostas(l=>l.filter(x=>x.imovelId!==id));
+    } else if (type==="visita") setVisitas(l=>l.filter(x=>x.id!==id));
+    else if (type==="proposta") setPropostas(l=>l.filter(x=>x.id!==id));
+    else if (type==="corretor") setCorretores(l=>l.filter(x=>x.id!==id));
+  }
+  function resetData() {
+    if (!window.confirm("Restaurar dados de demonstração? Isto substitui os dados atuais.")) return;
+    const s = makeSeed();
+    setImoveis(s.imoveis); setVisitas(s.visitas); setPropostas(s.propostas); setCorretores(s.corretores);
+    setConfig({ mesPrograma:2, budgetMes:55000 });
+  }
+
+  const tabs = [
+    ["painel","Painel",Ic.dash],
+    ["revisao","Revisão",Ic.alert],
+    ["imoveis","Imóveis",Ic.home],
+    ["visitas","Visitas",Ic.eye],
+    ["propostas","Propostas",Ic.doc],
+    ["corretores","Corretores",Ic.users],
+    ["metas","Metas & Bônus",Ic.target],
+    ["relatorio","Relatório",Ic.report],
+  ];
+
+  const showMonthNav = ["painel","revisao","imoveis","metas","relatorio"].includes(tab);
+
+  return (
+    <div className="min-h-screen" style={{ background:C.bg }}>
+      <header className="sticky top-0 z-30 no-print" style={{ background:C.petrolDark }}>
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-white text-lg" style={{ background:C.petrol }}>a</div>
+            <div>
+              <div className="text-white font-bold leading-tight">aMORA</div>
+              <div className="text-[11px]" style={{color:"#9FC3CE"}}>Gestão de Carteira</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {showMonthNav && <MonthNav ym={ym} setYm={setYm} />}
+            <button onClick={resetData} title="Restaurar demonstração" className="p-2 rounded-lg text-white/80 hover:bg-white/10"><Ic.reset width={18} height={18}/></button>
+          </div>
+        </div>
+        <nav className="border-t border-white/10">
+          <div className="max-w-7xl mx-auto px-2 flex gap-1 overflow-x-auto scroll-soft">
+            {tabs.map(([k,label,Icon])=>(
+              <button key={k} onClick={()=>setTab(k)} className="flex items-center gap-2 px-3.5 py-3 text-[13px] font-semibold whitespace-nowrap transition-colors" style={{ color: tab===k?"#fff":"#9FC3CE", borderBottom:`2px solid ${tab===k?C.amber:"transparent"}` }}>
+                <Icon width={16} height={16}/> {label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        {tab==="painel" && <PainelScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} />}
+        {tab==="revisao" && <RevisaoScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} onEdit={im=>setModal({type:"imovel",initial:im})} />}
+        {tab==="imoveis" && <ImoveisScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} onNew={()=>setModal({type:"imovel"})} onEdit={im=>setModal({type:"imovel",initial:im})} onDelete={id=>remove("imovel",id)} />}
+        {tab==="visitas" && <VisitasScreen imoveis={I} visitas={V} corretores={Cor} onNew={()=>setModal({type:"visita"})} onEdit={v=>setModal({type:"visita",initial:v})} onDelete={id=>remove("visita",id)} />}
+        {tab==="propostas" && <PropostasScreen imoveis={I} propostas={P} corretores={Cor} onNew={()=>setModal({type:"proposta"})} onEdit={p=>setModal({type:"proposta",initial:p})} onDelete={id=>remove("proposta",id)} />}
+        {tab==="corretores" && <CorretoresScreen corretores={Cor} imoveis={I} visitas={V} propostas={P} onNew={()=>setModal({type:"corretor"})} onEdit={c=>setModal({type:"corretor",initial:c})} onDelete={id=>remove("corretor",id)} />}
+        {tab==="metas" && <MetasScreen imoveis={I} visitas={V} propostas={P} config={config} setConfig={setConfig} ref={ref} ym={ym} />}
+        {tab==="relatorio" && <RelatorioScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} config={config} ref={ref} ym={ym} />}
+      </main>
+
+      {modal && <FormModal type={modal.type} initial={modal.initial} imoveis={I} corretores={Cor} onClose={()=>setModal(null)} onSave={item=>upsert(modal.type, item)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
