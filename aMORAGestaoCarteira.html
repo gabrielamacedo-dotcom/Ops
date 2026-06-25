@@ -6,7 +6,8 @@
 <title>aMORA · Gestão de Carteira</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+<script>Babel.registerPreset("react-classic",{presets:[[Babel.availablePresets["react"],{runtime:"classic"}]]});</script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   html, body { background: #EDF1F4; margin: 0; padding: 0; }
@@ -26,7 +27,7 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
+<script type="text/babel" data-presets="react-classic">
 const { useState, useEffect, useMemo, useRef } = React;
 
 /* ============================ THEME ============================ */
@@ -39,11 +40,11 @@ const C = {
 
 /* ============================ OPTIONS ============================ */
 const CANAIS = ["QA", "Corretor", "Direto"];
-const STATUS_IMOVEL = ["Disponível", "Proposta aceita", "Contrato em assinatura", "Vendido", "Em reforma"];
+const PROPRIETARIOS = ["P2P", "MORUS NIGRA", "MORUS ALBA"];
+const STATUS_IMOVEL = ["Disponível", "Indisponível", "Proposta aceita", "Em processo de venda", "Contrato assinado", "Vendido", "Em reforma"];
 const STATUS_PROPOSTA = ["Em negociação", "Aceita", "Recusada", "Convertida em venda"];
 const INTERESSE = ["Alto", "Médio", "Baixo", "Nenhum"];
 const MOTIVO_PERDA = ["Preço", "Crédito", "Concorrência", "Cliente desistiu", "Outros"];
-const STATUS_CORRETOR = ["Ativo", "Morno", "Inativo", "Novo"];
 
 /* ============================ HELPERS ============================ */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
@@ -60,9 +61,15 @@ const quarterOf = m0 => m0<=2?"Q1":m0<=5?"Q2":m0<=8?"Q3":"Q4";
 const refOf = ym => { const [y,m]=ym.split("-").map(Number); const end=new Date(y,m,0); end.setHours(0,0,0,0); const t=todayDate(); return end>t?t:end; };
 const startOf = ym => { const [y,m]=ym.split("-").map(Number); return new Date(y,m-1,1); };
 const mono = "ui-monospace, 'SF Mono', 'Cascadia Code', monospace";
+// Navegação e consolidação anual começam em janeiro/2026; jan–abr ficam zerados.
+// O controle oficial (números reais) vale a partir de maio/2026.
+const MIN_YM = "2026-01";
+const OFFICIAL_START = "2026-05";
+const clampYM = ym => ym < MIN_YM ? MIN_YM : ym;
+const officialMonths = upTo => { const out=[]; let m=MIN_YM; while (m <= upTo && out.length < 120) { out.push(m); m = shiftYM(m,1); } return out; };
 
 /* ============================ STORAGE ============================ */
-const VER = "v5";
+const VER = "v6";
 const KEYS = {
   imoveis: `amora:${VER}:imoveis`,
   visitas: `amora:${VER}:visitas`,
@@ -75,56 +82,54 @@ const saveLS = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } cat
 
 /* ============================ SEED ============================ */
 function makeSeed() {
-  const corMap = {}, corretores = [];
-  const getCor = (nome, regiao) => {
-    if (!nome) return "";
-    if (!corMap[nome]) {
-      const c = { id: uid(), nome, whatsapp: "", regiao: regiao||"", especialidade: "", ultimoContato: "2026-05-25", statusRelacionamento: "Ativo" };
-      corMap[nome] = c; corretores.push(c);
-    }
-    return corMap[nome].id;
-  };
+  // Dados da carteira (fonte: planilha de controle). prop=proprietário, cli=cliente desistente, neg=nome do negócio, end=endereço, un=unidade.
   const P = [
-    ["Condomínio Pegasus", "Vila Mariana", "Zona Sul", "Disponível", "2025-02-15", 720000, 3200, "", "", [["2026-05-20","Corretor","C"],["2026-05-12","QA",""]], "Karla Gonçalves"],
-    ["Vivere Vila Matilde", "Vila Matilde", "Zona Leste", "Disponível", "2025-07-15", 480000, 2400, "", "", [["2026-05-06","QA",""],["2026-05-19","QA",""]], "Fabiana Fernandes da Silva"],
-    ["Duo Morumbi", "Morumbi", "Zona Oeste", "Proposta aceita", "2025-07-15", 950000, 4200, "2026-05-26", "", [["2026-05-10","Corretor","C"],["2026-05-14","Corretor","C"],["2026-05-21","QA",""]], "Victor Fornasiero de Paiva"],
-    ["You Pateo Santa Cruz", "Santa Cruz", "Zona Sul", "Disponível", "2025-08-15", 530000, 2600, "", "", [["2026-05-16","QA",""]], "Ricardo Giovannetti Franklin"],
-    ["Vivacittà", "Tatuapé", "Zona Leste", "Disponível", "2025-10-15", 610000, 2900, "", "", [["2026-05-11","QA",""]], "Vitor Augusto Zanoni"],
-    ["Família Freguesia do Ó", "Freguesia do Ó", "Zona Norte", "Disponível", "2025-02-15", 440000, 2200, "", "", [["2026-05-05","QA",""],["2026-05-18","QA",""]], "Paulo Roberto Da Conceição Junior"],
-    ["Clube Jaçanã", "Jaçanã", "Zona Norte", "Disponível", "2025-06-15", 390000, 1900, "", "", [["2026-05-12","Corretor","C"],["2026-05-22","QA",""]], "Letícia Boldrini Nogueira"],
-    ["Camboriú", "Camboriú", "Litoral", "Disponível", "2026-02-01", 700000, 3000, "", "", [], "Dennis Pellegrini Ferreira"],
-    ["Portal de Guarulhos", "Guarulhos", "Guarulhos", "Disponível", "2025-09-15", 350000, 1700, "", "", [["2026-05-09","QA",""],["2026-05-23","QA",""]], "Robson Dos Santos Correa"],
-    ["Le Corbusier", "Vila Clementino", "Zona Sul", "Proposta aceita", "2025-05-15", 880000, 3900, "2026-05-25", "", [["2026-05-07","Corretor","C"],["2026-05-13","Corretor","C"],["2026-05-17","Corretor","C"],["2026-05-24","Corretor","C"],["2026-05-09","QA",""],["2026-05-22","QA",""]], "Marcia Marques"],
-    ["Villa Amalfi", "Santana", "Zona Norte", "Disponível", "2026-04-15", 760000, 3400, "", "", [], "Vanessa Cremasco"],
-    ["Vivence Condomínio Club", "Interlagos", "Zona Sul", "Disponível", "2025-09-15", 540000, 2700, "", "", [["2026-04-20","Corretor","C"]], "Douglas da Conceição"],
-    ["Ed. Genova", "Bela Vista", "Centro", "Disponível", "2025-08-15", 690000, 3100, "", "", [], "Fernanda Castro"],
-    ["Cond. Royal Point - 98m²", "Pinheiros", "Zona Oeste", "Disponível", "2026-01-28", 1100000, 4800, "", "", [["2026-04-25","Corretor","C"]], "Gisele Macedo"],
-    ["Cond. Ritmos da Barra - 34m²", "Barra Funda", "Centro", "Disponível", "2025-09-15", 320000, 1600, "", "", [["2026-05-14","QA",""]], "Sandui Neto"],
-    ["Lume - Alto da Boa Vista", "Alto da Boa Vista", "Zona Sul", "Disponível", "2025-12-15", 820000, 3700, "", "", [["2026-05-19","Corretor","C"],["2026-05-28","QA",""]], "Layo Vinicyus Alves Pereira"],
-    ["Cond. Moema Advanced Home", "Moema", "Zona Sul", "Disponível", "2026-02-15", 1250000, 5200, "", "", [["2026-04-05","QA",""]], "Derby Nero Neto"],
-    ["Town House Village Morumbi", "Morumbi", "Zona Oeste", "Vendido", "2026-03-01", 990000, 4300, "2026-03-25", "2026-05-15", [], ""],
-    ["Residencial Família Vila Ema - 58m²", "Vila Ema", "Zona Leste", "Vendido", "2026-01-10", 470000, 2300, "2026-03-20", "2026-05-10", [], ""],
-    ["Márcia Maria / Triunfo", "Triunfo", "Outros", "Vendido", "2025-10-01", 380000, 1800, "2026-02-15", "2026-05-20", [], ""],
+    { nome:"Condomínio Edifício Moema Advanced Home", prop:"P2P", cli:"Derby Nery Neto", neg:"Derby Nero Neto", end:"Av. Moaci, 534", bairro:"Moema", cidade:"São Paulo", un:"34", status:"Disponível", disp:"", valor:0, vd:0, comp:"", des:"", vis:[["2026-04-05","QA"]] },
+    { nome:"Condomínio Pegasus", prop:"P2P", cli:"Karla Goncalves", neg:"Karla Gonçalves", end:"R. Contos Gauchescos, 82", bairro:"Vila Mascote", cidade:"São Paulo", un:"74", status:"Disponível", disp:"2025-02-24", valor:520000, vd:505000, comp:"", des:"", vis:[["2026-05-20","Corretor"],["2026-05-12","QA"]] },
+    { nome:"Vivere Vila Matilde", prop:"MORUS NIGRA", cli:"Fabiana Fernandes", neg:"Fabiana Fernandes da Silva", end:"R. Teodoro Mascarenhas, 415", bairro:"Vila Matilde", cidade:"São Paulo", un:"21", status:"Disponível", disp:"2025-08-04", valor:800000, vd:635000, comp:"", des:"", vis:[["2026-05-06","QA"],["2026-05-19","QA"]] },
+    { nome:"Duo Morumbi", prop:"MORUS NIGRA", cli:"Victor Fornasiero", neg:"Victor Fornasiero de Paiva", end:"R. Marie Nader Calfat, 351", bairro:"Vila Andrade", cidade:"São Paulo", un:"63", status:"Proposta aceita", disp:"2025-07-29", valor:352000, vd:335000, comp:"2026-05-26", des:"", vis:[["2026-05-10","Corretor"],["2026-05-14","Corretor"],["2026-05-21","QA"]] },
+    { nome:"You Pateo Santa Cruz", prop:"MORUS NIGRA", cli:"Ricardo Giovannetti", neg:"Ricardo Giovannetti Franklin", end:"R. Assungui, 721", bairro:"Cursino", cidade:"São Paulo", un:"15", status:"Disponível", disp:"2025-09-03", valor:940000, vd:889000, comp:"", des:"", vis:[["2026-05-16","QA"]] },
+    { nome:"Vivacittà", prop:"MORUS NIGRA", cli:"Vitor Zanoni", neg:"Vitor Augusto Zanoni", end:"R. Justino Paixão, 467", bairro:"Jardim São Caetano", cidade:"São Caetano do Sul", un:"38", status:"Disponível", disp:"2025-10-20", valor:1180000, vd:1110000, comp:"", des:"", vis:[["2026-05-11","QA"]] },
+    { nome:"Família Freguesia do Ó", prop:"MORUS NIGRA", cli:"Paulo Roberto Da Conceição", neg:"Paulo Roberto Da Conceição Junior", end:"R. Jacaré-Copaíba, 30", bairro:"Freguesia do Ó", cidade:"São Paulo", un:"24A", status:"Disponível", disp:"2025-02-24", valor:400000, vd:415000, comp:"", des:"", vis:[["2026-05-05","QA"],["2026-05-18","QA"]] },
+    { nome:"Clube Jaçanã", prop:"MORUS NIGRA", cli:"João Rafael", neg:"Letícia Boldrini Nogueira", end:"Av. Mendes da Rocha, 1093", bairro:"Vila Medeiros", cidade:"São Paulo", un:"157C", status:"Disponível", disp:"2025-06-27", valor:430000, vd:400000, comp:"", des:"", vis:[["2026-05-12","Corretor"],["2026-05-22","QA"]] },
+    { nome:"Lume - Alto da Boa Vista", prop:"P2P", cli:"Ruth Lima", neg:"Layo Vinicyus Alves Pereira", end:"Av. Vereador José Diniz, 341", bairro:"Santo Amaro", cidade:"São Paulo", un:"237", status:"Disponível", disp:"2025-12-09", valor:610000, vd:0, comp:"", des:"", vis:[["2026-05-19","Corretor"],["2026-05-28","QA"]] },
+    { nome:"Camboriú", prop:"MORUS NIGRA", cli:"Dennis Pellegrini", neg:"Dennis Pellegrini Ferreira", end:"Av. Armando Ferrentini, 563", bairro:"Vila Mariana", cidade:"São Paulo", un:"73", status:"Disponível", disp:"", valor:0, vd:0, comp:"", des:"", vis:[] },
+    { nome:"Portal de Guarulhos", prop:"MORUS NIGRA", cli:"Robson Dos Santos Correa", neg:"Robson Dos Santos Correa", end:"R. Anapurus, 60", bairro:"Gopoúva", cidade:"Guarulhos", un:"33", status:"Disponível", disp:"2025-09-22", valor:400000, vd:387000, comp:"", des:"", vis:[["2026-05-09","QA"],["2026-05-23","QA"]] },
+    { nome:"Le Corbusier", prop:"MORUS ALBA", cli:"Marcia Marques", neg:"Marcia Marques", end:"R. Cruz das Almas, 301", bairro:"Jabaquara", cidade:"São Paulo", un:"124", status:"Proposta aceita", disp:"2025-05-21", valor:310000, vd:292000, comp:"2026-05-25", des:"", vis:[["2026-05-07","Corretor"],["2026-05-13","Corretor"],["2026-05-17","Corretor"],["2026-05-24","Corretor"],["2026-05-09","QA"],["2026-05-22","QA"]] },
+    { nome:"Villa Amalfi", prop:"MORUS ALBA", cli:"Vanessa Cremasco", neg:"Vanessa Cremasco", end:"R. Leonardo Cerveira Varandas, 50", bairro:"Vila Andrade", cidade:"São Paulo", un:"71", status:"Disponível", disp:"2026-04-13", valor:0, vd:0, comp:"", des:"", vis:[] },
+    { nome:"Vivence Condomínio Club", prop:"MORUS ALBA", cli:"Douglas da Conceição", neg:"Douglas da Conceição", end:"Av. Alda, 858", bairro:"Centro", cidade:"Diadema", un:"1", status:"Disponível", disp:"2025-09-23", valor:590000, vd:560000, comp:"", des:"", vis:[["2026-04-20","Corretor"]] },
+    { nome:"Ed. Genova", prop:"MORUS ALBA", cli:"Fernanda Castro", neg:"Fernanda Castro", end:"R. dos Democratas, 715", bairro:"Saúde", cidade:"São Paulo", un:"112", status:"Disponível", disp:"2025-08-08", valor:775000, vd:735000, comp:"", des:"", vis:[] },
+    { nome:"Condomínio Royal Point - 98m²", prop:"MORUS ALBA", cli:"Gisele Macedo", neg:"Gisele Macedo", end:"Rua Deputado João Sussumu Hirata, 530", bairro:"Vila Andrade", cidade:"São Paulo", un:"22", status:"Disponível", disp:"", valor:0, vd:0, comp:"", des:"", vis:[["2026-04-25","Corretor"]] },
+    { nome:"Condomínio Ritmos da Barra - 34m²", prop:"MORUS ALBA", cli:"Sandui Neto", neg:"Sandui Neto", end:"R. Cônego Vicente Miguel Marino, 137", bairro:"Campos Elíseos", cidade:"São Paulo", un:"910", status:"Disponível", disp:"2025-09-25", valor:315000, vd:297000, comp:"", des:"", vis:[["2026-05-14","QA"]] },
+    { nome:"Town House Village Morumbi", prop:"", cli:"", neg:"", end:"", bairro:"Morumbi", cidade:"São Paulo", un:"", status:"Vendido", disp:"2026-03-01", valor:990000, vd:0, comp:"2026-03-25", des:"2026-05-15", vis:[] },
+    { nome:"Residencial Família Vila Ema - 58m²", prop:"", cli:"", neg:"", end:"", bairro:"Vila Ema", cidade:"São Paulo", un:"", status:"Vendido", disp:"2026-01-10", valor:470000, vd:0, comp:"2026-03-20", des:"2026-05-10", vis:[] },
+    { nome:"Márcia Maria / Triunfo", prop:"", cli:"", neg:"", end:"", bairro:"Triunfo", cidade:"São Paulo", un:"", status:"Vendido", disp:"2025-10-01", valor:380000, vd:0, comp:"2026-02-15", des:"2026-05-20", vis:[] },
   ];
   const imoveis = [], visitas = [];
-  P.forEach((row, i) => {
-    const [nome, bairro, regiao, status, disp, valor, carrego, comp, des, vis, negocio] = row;
-    const corId = getCor(negocio, regiao);
+  const canalKey = c => c==="Corretor" ? "corretor" : c==="Direto" ? "direto" : "qa";
+  P.forEach((r, i) => {
     const id = uid();
-    imoveis.push({ id, codigo: `AM-${String(101+i).padStart(4,"0")}`, nome, bairro, regiao, dataDisponibilizacao: disp, valorAnunciado: valor, valorMinimo: Math.round(valor*0.93), corretorId: corId, canalPrincipal: "QA", status, dataPropostaAceita: comp, dataVenda: des, carregoMensal: carrego, observacoes: "" });
-    vis.forEach(([d,canal,who]) => visitas.push({ id: uid(), imovelId: id, data: d, corretorId: who==="C"?corId:"", cliente: "—", canalOrigem: canal, qualificada: true, checkin: true, feedback: "", interesse: "Médio", proximoPasso: "" }));
+    imoveis.push({ id, codigo: `AM-${String(101+i).padStart(4,"0")}`, nome: r.nome, proprietario: r.prop, clienteDesistente: r.cli, nomeNegocio: r.neg, endereco: r.end, bairro: r.bairro, cidade: r.cidade, unidade: r.un, valorAnunciado: r.valor, vendaDireta: r.vd, canalPrincipal: "QA", status: r.status, dataDisponibilizacao: r.disp, dataPropostaAceita: r.comp, dataVenda: r.des, observacoes: "" });
+    // agrega as visitas (de origem) em contagens por mês e canal
+    const agg = {};
+    r.vis.forEach(([d,canal]) => {
+      const y = d.slice(0,7);
+      if (!agg[y]) agg[y] = { imovelId: id, ym: y, qa: 0, corretor: 0, direto: 0 };
+      agg[y][canalKey(canal)]++;
+    });
+    Object.values(agg).forEach(x => visitas.push(x));
   });
   const byNome = n => imoveis.find(x => x.nome===n)?.id;
   const propostas = [
-    { id: uid(), imovelId: byNome("Le Corbusier"), data: "2026-05-25", valorOfertado: 850000, valorAprovado: 855000, canal: "Corretor", corretorId: corMap["Marcia Marques"]?.id||"", status: "Aceita", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("Duo Morumbi"), data: "2026-05-26", valorOfertado: 905000, valorAprovado: 910000, canal: "QA", corretorId: corMap["Victor Fornasiero de Paiva"]?.id||"", status: "Aceita", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-19", valorOfertado: 790000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-28", valorOfertado: 800000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("Condomínio Pegasus"), data: "2026-05-20", valorOfertado: 690000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("You Pateo Santa Cruz"), data: "2026-05-16", valorOfertado: 505000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
-    { id: uid(), imovelId: byNome("Clube Jaçanã"), data: "2026-05-22", valorOfertado: 372000, valorAprovado: 0, canal: "QA", corretorId: "", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Le Corbusier"), data: "2026-05-25", valorOfertado: 300000, valorAprovado: 305000, canal: "Corretor", status: "Aceita", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Duo Morumbi"), data: "2026-05-26", valorOfertado: 340000, valorAprovado: 345000, canal: "QA", status: "Aceita", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-19", valorOfertado: 595000, valorAprovado: 0, canal: "QA", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Lume - Alto da Boa Vista"), data: "2026-05-28", valorOfertado: 600000, valorAprovado: 0, canal: "QA", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Condomínio Pegasus"), data: "2026-05-20", valorOfertado: 500000, valorAprovado: 0, canal: "QA", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("You Pateo Santa Cruz"), data: "2026-05-16", valorOfertado: 880000, valorAprovado: 0, canal: "QA", status: "Em negociação", motivoPerda: "" },
+    { id: uid(), imovelId: byNome("Clube Jaçanã"), data: "2026-05-22", valorOfertado: 395000, valorAprovado: 0, canal: "QA", status: "Em negociação", motivoPerda: "" },
   ];
-  return { imoveis, visitas, propostas, corretores };
+  return { imoveis, visitas, propostas };
 }
 
 /* ============================ CALC ============================ */
@@ -133,27 +138,37 @@ function calcImovel(im, visitas, propostas, ref, ym) {
   const desembolso = parseDate(im.dataVenda);
   const compromisso = parseDate(im.dataPropostaAceita);
   const fimMercado = desembolso || ref;
-  const mercadoDias = (disp && fimMercado) ? Math.floor((fimMercado - disp)/86400000) : 0;
   const mercadoMeses = monthsBetween(fimMercado, disp) || 0;
-  const carregoAcum = Math.round(im.carregoMensal * (mercadoDias/30));
   const visIm = visitas.filter(v => v.imovelId === im.id);
   const propIm = propostas.filter(p => p.imovelId === im.id);
-  const visMes = visIm.filter(v => sameYM(v.data, ym)).length;
+  const sumRow = r => r ? ((Number(r.qa)||0)+(Number(r.corretor)||0)+(Number(r.direto)||0)) : 0;
+  const visMes = sumRow(visIm.find(v => v.ym === ym));
   const propMes = propIm.filter(p => sameYM(p.data, ym)).length;
-  const ultVisita = visIm.length ? new Date(Math.max(...visIm.map(v => parseDate(v.data)))) : null;
+  // recência de visita em meses: meses consecutivos sem visita a partir do mês selecionado,
+  // limitado ao início oficial (maio/2026) e à disponibilização do imóvel.
+  const dispYM = disp ? ymOf(disp) : null;
+  let mesesSemVisita = 0, cur = ym;
+  for (let n=0; n<24; n++) {
+    if (sumRow(visIm.find(v => v.ym === cur)) > 0) break;
+    mesesSemVisita++;
+    const prev = shiftYM(cur, -1);
+    if (prev < OFFICIAL_START || (dispYM && prev < dispYM)) break;
+    cur = prev;
+  }
   const ultProp = propIm.length ? new Date(Math.max(...propIm.map(p => parseDate(p.data)))) : null;
-  const diasSemVisita = daysBetween(ref, ultVisita || disp);
   const diasSemProposta = daysBetween(ref, ultProp || disp);
   const disponivel = im.status === "Disponível";
+  const controlado = ym >= OFFICIAL_START; // jan–abr fora do controle: sem flags/saúde
+  const necessitaDisparo = controlado && disponivel && mesesSemVisita >= 1;
+  const necessitaRevisao = controlado && disponivel && diasSemProposta > 45;
+  const atencaoMaxima = controlado && disponivel && (mesesSemVisita >= 2 || diasSemProposta > 60);
+  // Saúde reflete a aba Revisão: vermelho = atenção máxima; amarelo = disparo ou revisão de preço; verde = em dia.
   let saude = "neutro";
-  if (disponivel) {
-    if (diasSemVisita > 60) saude = "vermelho";
-    else if (diasSemVisita > 30) saude = "amarelo";
+  if (disponivel && controlado) {
+    if (atencaoMaxima) saude = "vermelho";
+    else if (necessitaDisparo || necessitaRevisao) saude = "amarelo";
     else saude = "verde";
   }
-  const necessitaDisparo = disponivel && diasSemVisita > 30;
-  const necessitaRevisao = disponivel && diasSemProposta > 45;
-  const atencaoMaxima = disponivel && (diasSemVisita > 60 || diasSemProposta > 60);
   const temCompromisso = !!compromisso;
   let bonusVenda = 0, bonusDias = null, bonusMeses = null;
   if (compromisso && disp) {
@@ -164,42 +179,107 @@ function calcImovel(im, visitas, propostas, ref, ym) {
     else if (bonusDias <= 365) bonusVenda = 1000;
     else bonusVenda = 500;
   }
-  return { mercadoMeses, mercadoDias, carregoAcum, diasSemVisita, diasSemProposta, visMes, propMes, saude, necessitaDisparo, necessitaRevisao, atencaoMaxima, bonusVenda, bonusDias, bonusMeses, temCompromisso };
+  return { mercadoMeses, mesesSemVisita, diasSemProposta, visMes, propMes, saude, necessitaDisparo, necessitaRevisao, atencaoMaxima, bonusVenda, bonusDias, bonusMeses, temCompromisso };
+}
+
+function ymStringOf(dateString) {
+  return dateString ? dateString.slice(0,7) : null;
+}
+function isSaleFlowVisit(im, ym) {
+  // Só contam como visitas em fluxo de venda os imóveis "Em processo de venda" ou "Vendido".
+  if (!im) return false;
+  if (im.status === "Em processo de venda") return true;
+  if (im.status === "Vendido") {
+    const vendaYM = ymStringOf(im.dataVenda);
+    return !vendaYM || ym <= vendaYM;
+  }
+  return false;
+}
+function wasAvailableAtStartOfMonth(im, ym) {
+  const dispYM = ymStringOf(im.dataDisponibilizacao);
+  if (dispYM && ym < dispYM) return false;
+  const vendaYM = ymStringOf(im.dataVenda);
+  if (vendaYM && ym > vendaYM) return false;
+  const propostaYM = ymStringOf(im.dataPropostaAceita);
+  if (propostaYM && ym > propostaYM) return false;
+  return true;
+}
+function isActiveInMonth(im, ym) {
+  const vendaYM = ymStringOf(im.dataVenda);
+  const propostaYM = ymStringOf(im.dataPropostaAceita);
+  if (vendaYM && ym > vendaYM) return false;
+  if (propostaYM && ym > propostaYM) return false;
+  return true;
+}
+function isDesembolsadoByMonth(im, ym) {
+  const vendaYM = ymStringOf(im.dataVenda);
+  return vendaYM ? ym >= vendaYM : false;
 }
 
 function calcMetas(imoveis, visitas, propostas, config, ref, ym) {
-  const estoque = imoveis.filter(i => i.status === "Disponível").length;
+  // Meses anteriores a maio/2026 ficam zerados (controle oficial só a partir de maio).
+  if (ym < OFFICIAL_START) {
+    return {
+      estoque:0, metaVisitas:0, visitasRealizadas:0, porCanal:{QA:0,Corretor:0,Direto:0}, foraQA:0, pctFora:0,
+      propostasRecebidas:0, metaPropostas:0, compromissosMes:[], vendasMes:0, desembolsosMes:0,
+      trimestre:quarterOf(Number(ym.split("-")[1])-1), metaVendas:0, semVisitaMes:0,
+      okVisitas:false, okCanais:false, okConversao:false, okSaude:false, okVendas:false,
+      orcamentoTri:Number(config.orcamentoTrimestre)||0, custoOpTri:Number(config.custoOperacionalTrimestre)||0, multiplicador:1,
+      bonusVendasMes:0, mesPrograma:Number(config.mesPrograma)||1,
+      itensFunil:[
+        { label:"Visitas", detalhe:"—", ok:false, valor:0 },
+        { label:"Canais (% fora QA)", detalhe:"—", ok:false, valor:0 },
+        { label:"Conversão V→P", detalhe:"—", ok:false, valor:0 },
+        { label:"Saúde (visita no mês)", detalhe:"—", ok:false, valor:0 },
+      ],
+      bonusFunil:0, bonusTotal:0, tempoMedio:0, convVP:0,
+      visitasFluxo:0, ativos:[], contratoAssinado:[], emProcessoVenda:[], propostaAndamento:[], aVenda:[], emReforma:[], desembolsados:[],
+      faixasCounts:[
+        { label:"Até 3m", count:0, color:"#1E8A50" },
+        { label:"3 – 6m", count:0, color:"#E8921A" },
+        { label:"6 – 9m", count:0, color:"#D06010" },
+        { label:"9 – 12m", count:0, color:"#C04010" },
+        { label:"12m+", count:0, color:"#BC3726" },
+      ],
+    };
+  }
+  const sumRow = r => r ? ((Number(r.qa)||0)+(Number(r.corretor)||0)+(Number(r.direto)||0)) : 0;
+  const estoque = imoveis.filter(i => i.status === "Disponível" && wasAvailableAtStartOfMonth(i, ym)).length;
   const metaVisitas = estoque * 3;
-  const visMes = visitas.filter(v => sameYM(v.data, ym));
-  const visitasRealizadas = visMes.length;
-  const porCanal = { QA: 0, Corretor: 0, Direto: 0 };
-  visMes.forEach(v => { if (porCanal[v.canalOrigem] !== undefined) porCanal[v.canalOrigem]++; });
-  const foraQA = visMes.filter(v => v.canalOrigem !== "QA").length;
+  const visMesRows = visitas.filter(v => v.ym === ym);
+  const porCanal = {
+    QA: visMesRows.reduce((s,r)=>s+(Number(r.qa)||0),0),
+    Corretor: visMesRows.reduce((s,r)=>s+(Number(r.corretor)||0),0),
+    Direto: visMesRows.reduce((s,r)=>s+(Number(r.direto)||0),0),
+  };
+  const visitasRealizadas = porCanal.QA + porCanal.Corretor + porCanal.Direto;
+  const visitasFluxo = visMesRows.reduce((s,r)=>{
+    const im = imoveis.find(i=>i.id===r.imovelId);
+    return s + (isSaleFlowVisit(im, ym) ? ((Number(r.qa)||0)+(Number(r.corretor)||0)+(Number(r.direto)||0)) : 0);
+  }, 0);
+  const foraQA = porCanal.Corretor + porCanal.Direto;
   const pctFora = visitasRealizadas ? Math.round(foraQA/visitasRealizadas*100) : 0;
   const propMes = propostas.filter(p => sameYM(p.data, ym));
   const propostasRecebidas = propMes.length;
-  const metaPropostas = Math.ceil(visitasRealizadas * 0.12);
+  const metaPropostas = Math.ceil(metaVisitas * 0.12);
   const compromissosMes = imoveis.filter(i => sameYM(i.dataPropostaAceita, ym));
   const vendasMes = compromissosMes.length;
   const desembolsosMes = imoveis.filter(i => sameYM(i.dataVenda, ym)).length;
   const trimestre = quarterOf(Number(ym.split("-")[1])-1);
   const metaVendas = trimestre === "Q2" ? 3 : trimestre === "Q3" ? 4 : 3;
-  const semVisita30 = imoveis.filter(i => {
-    if (i.status !== "Disponível") return false;
-    const calc = calcImovel(i, visitas, propostas, ref, ym);
-    return calc.diasSemVisita > 30;
-  }).length;
+  const semVisitaMes = imoveis.filter(i => i.status === "Disponível" && sumRow(visitas.find(v => v.imovelId===i.id && v.ym===ym)) === 0).length;
   const okVisitas = metaVisitas > 0 && visitasRealizadas >= metaVisitas;
   const okCanais = pctFora >= 30;
   const okConversao = metaPropostas > 0 && propostasRecebidas >= metaPropostas;
-  const okSaude = semVisita30 === 0;
+  const okSaude = semVisitaMes === 0;
   const okVendas = vendasMes >= metaVendas;
-  const custoCalc = imoveis.filter(i => i.status !== "Vendido").reduce((s,i) => s + (i.carregoMensal||0), 0);
-  const budget = Number(config.budgetMes)||0;
+  // Trava de eficiência (trimestral): custo operacional controlável (bônus corretores + fotos + reformas) vs orçamento do programa.
+  const orcamentoTri = Number(config.orcamentoTrimestre)||0;
+  const custoOpTri = Number(config.custoOperacionalTrimestre)||0;
   let multiplicador = 1;
-  if (budget > 0) {
-    if (custoCalc <= budget) multiplicador = 1;
-    else if (custoCalc <= budget * 1.2) multiplicador = 0.5;
+  if (orcamentoTri > 0) {
+    if (custoOpTri <= orcamentoTri) multiplicador = 1;
+    else if (custoOpTri <= orcamentoTri * 1.2) multiplicador = 0.5;
     else multiplicador = 0;
   }
   const bonusVendasMes = compromissosMes.reduce((s,i) => s + calcImovel(i, visitas, propostas, ref, ym).bonusVenda, 0);
@@ -208,13 +288,16 @@ function calcMetas(imoveis, visitas, propostas, config, ref, ym) {
     { label: "Visitas", detalhe: `${visitasRealizadas} / meta ${metaVisitas}`, ok: okVisitas },
     { label: "Canais (% fora QA)", detalhe: `${pctFora}% / meta 30%`, ok: okCanais },
     { label: "Conversão V→P", detalhe: `${propostasRecebidas} propostas / meta ${metaPropostas}`, ok: okConversao },
-    { label: "Saúde (30d+)", detalhe: `${semVisita30} imóveis s/ visita > 30d`, ok: okSaude },
+    { label: "Saúde (visita no mês)", detalhe: `${semVisitaMes} imóveis s/ visita no mês`, ok: okSaude },
   ];
   let bonusFunil = 0;
   if (mesPrograma <= 2) {
-    bonusFunil = itensFunil.reduce((s,it) => s + (it.ok ? 500 : 0), 0);
+    itensFunil.forEach(it => { it.valor = it.ok ? 500 : 0; });
+    bonusFunil = itensFunil.reduce((s,it) => s + it.valor, 0);
   } else {
-    bonusFunil = itensFunil.every(it => it.ok) ? 2000 : 0;
+    const todosOk = itensFunil.every(it => it.ok);
+    itensFunil.forEach(it => { it.valor = todosOk ? 500 : 0; });
+    bonusFunil = todosOk ? 2000 : 0;
   }
   const bonusTotal = Math.round((bonusVendasMes + bonusFunil) * multiplicador);
   const disponiveis = imoveis.filter(i => i.status === "Disponível");
@@ -222,13 +305,15 @@ function calcMetas(imoveis, visitas, propostas, config, ref, ym) {
     ? Math.round(disponiveis.reduce((s,i) => s + (calcImovel(i, visitas, propostas, ref, ym).mercadoMeses || 0), 0) / disponiveis.length * 10) / 10
     : 0;
   const convVP = visitasRealizadas ? Math.round(propostasRecebidas/visitasRealizadas*100) : 0;
-  const ativos = imoveis.filter(i => i.status !== "Vendido");
+  const ativos = imoveis.filter(i => isActiveInMonth(i, ym) && !isDesembolsadoByMonth(i, ym));
   const propAndamentoIds = new Set(propostas.filter(p => p.status === "Em negociação" && parseDate(p.data) <= ref).map(p => p.imovelId));
-  const contratoAssinado = ativos.filter(i => i.dataPropostaAceita);
+  const contratoAssinado = ativos.filter(i => i.status === "Contrato assinado");
+  const emProcessoVenda = ativos.filter(i => ["Proposta aceita", "Em processo de venda"].includes(i.status));
+  const indisponiveis = ativos.filter(i => i.status === "Indisponível");
   const propostaAndamento = ativos.filter(i => !i.dataPropostaAceita && propAndamentoIds.has(i.id));
   const emReforma = ativos.filter(i => i.status === "Em reforma");
-  const aVenda = ativos.filter(i => !i.dataPropostaAceita && !propAndamentoIds.has(i.id) && i.status !== "Em reforma");
-  const desembolsados = imoveis.filter(i => i.status === "Vendido");
+  const aVenda = ativos.filter(i => i.status === "Disponível" && !propAndamentoIds.has(i.id));
+  const desembolsados = imoveis.filter(i => isDesembolsadoByMonth(i, ym));
   const faixas = [
     { label: "Até 3m", min: -1, max: 3, color: "#1E8A50" },
     { label: "3 – 6m", min: 3, max: 6, color: "#E8921A" },
@@ -244,21 +329,19 @@ function calcMetas(imoveis, visitas, propostas, config, ref, ym) {
     }).length,
   }));
   return {
-    estoque, metaVisitas, visitasRealizadas, porCanal, foraQA, pctFora,
+    estoque, metaVisitas, visitasRealizadas, visitasFluxo, porCanal, foraQA, pctFora,
     propostasRecebidas, metaPropostas, compromissosMes, vendasMes, desembolsosMes,
-    trimestre, metaVendas, semVisita30, okVisitas, okCanais, okConversao, okSaude, okVendas,
-    custoCalc, budget, multiplicador, bonusVendasMes, mesPrograma, itensFunil, bonusFunil, bonusTotal,
-    tempoMedio, convVP, ativos, contratoAssinado, propostaAndamento, aVenda, emReforma, desembolsados, faixasCounts,
+    trimestre, metaVendas, semVisitaMes, okVisitas, okCanais, okConversao, okSaude, okVendas,
+    orcamentoTri, custoOpTri, multiplicador, bonusVendasMes, mesPrograma, itensFunil, bonusFunil, bonusTotal,
+    tempoMedio, convVP, ativos, contratoAssinado, emProcessoVenda, indisponiveis, propostaAndamento, aVenda, emReforma, desembolsados, faixasCounts,
   };
 }
 
 /* ============================ DEFAULTS ============================ */
 function defaults(type) {
   const t = todayDate().toISOString().slice(0,10);
-  if (type==="imovel") return { codigo:"", nome:"", bairro:"", regiao:"", dataDisponibilizacao:t, valorAnunciado:0, valorMinimo:0, corretorId:"", canalPrincipal:"QA", status:"Disponível", dataPropostaAceita:"", dataVenda:"", carregoMensal:0, observacoes:"" };
-  if (type==="visita") return { data:t, imovelId:"", corretorId:"", cliente:"", canalOrigem:"QA", qualificada:false, checkin:false, feedback:"", interesse:"Médio", proximoPasso:"" };
-  if (type==="proposta") return { data:t, imovelId:"", valorOfertado:0, valorAprovado:0, canal:"QA", corretorId:"", status:"Em negociação", motivoPerda:"" };
-  return { nome:"", whatsapp:"", regiao:"", especialidade:"", ultimoContato:t, statusRelacionamento:"Novo" };
+  if (type==="imovel") return { codigo:"", nome:"", proprietario:"", clienteDesistente:"", nomeNegocio:"", endereco:"", bairro:"", cidade:"", unidade:"", dataDisponibilizacao:"", valorAnunciado:0, vendaDireta:0, canalPrincipal:"QA", status:"Disponível", dataPropostaAceita:"", dataVenda:"", observacoes:"" };
+  return { data:t, imovelId:"", valorOfertado:0, valorAprovado:0, canal:"QA", status:"Em negociação", motivoPerda:"" };
 }
 
 /* ============================ ICONS ============================ */
@@ -283,6 +366,7 @@ const Ic = {
   search: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
   reset: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>,
   download: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  upload: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
 };
 
 /* ============================ PRIMITIVES ============================ */
@@ -292,8 +376,10 @@ function Badge({ children, bg, fg }) {
 function statusImovelBadge(s) {
   const map = {
     "Disponível": [C.petrolLight, C.petrol],
+    "Indisponível": ["#F3F4F6", C.subtle],
     "Proposta aceita": [C.greenLight, C.green],
-    "Contrato em assinatura": [C.amberLight, C.amber],
+    "Em processo de venda": [C.amberLight, C.amber],
+    "Contrato assinado": [C.amberLight, C.amber],
     "Vendido": ["#E4E9EE", C.muted],
     "Em reforma": [C.yellowLight, C.yellow],
   };
@@ -306,16 +392,6 @@ function statusPropostaBadge(s) {
     "Aceita": [C.greenLight, C.green],
     "Recusada": [C.redLight, C.red],
     "Convertida em venda": [C.petrolLight, C.petrol],
-  };
-  const [bg,fg] = map[s] || ["#E4E9EE", C.muted];
-  return <Badge bg={bg} fg={fg}>{s}</Badge>;
-}
-function corretorBadge(s) {
-  const map = {
-    "Ativo": [C.greenLight, C.green],
-    "Morno": [C.yellowLight, C.yellow],
-    "Inativo": [C.redLight, C.red],
-    "Novo": [C.petrolLight, C.petrol],
   };
   const [bg,fg] = map[s] || ["#E4E9EE", C.muted];
   return <Badge bg={bg} fg={fg}>{s}</Badge>;
@@ -390,28 +466,21 @@ function ProgressBar({ value, max, color }) {
 }
 
 /* ============================ FORM MODAL ============================ */
-function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
+function FormModal({ type, initial, onClose, onSave, imoveis }) {
   const [data, setData] = useState(() => ({ ...(initial || defaults(type)) }));
   const [err, setErr] = useState({});
   const set = (k,v) => setData(d => ({ ...d, [k]:v }));
-  const titles = { imovel:"Imóvel", visita:"Visita", proposta:"Proposta", corretor:"Corretor" };
+  const titles = { imovel:"Imóvel", proposta:"Proposta" };
   const isEdit = !!(initial && initial.id);
 
   function validate() {
     const e = {};
     if (type==="imovel") {
       if (!data.nome?.trim()) e.nome = true;
-      if (!data.dataDisponibilizacao) e.dataDisponibilizacao = true;
-      if (!(Number(data.valorAnunciado)>0)) e.valorAnunciado = true;
-    } else if (type==="visita") {
-      if (!data.imovelId) e.imovelId = true;
-      if (!data.data) e.data = true;
     } else if (type==="proposta") {
       if (!data.imovelId) e.imovelId = true;
       if (!data.data) e.data = true;
       if (!(Number(data.valorOfertado)>0)) e.valorOfertado = true;
-    } else {
-      if (!data.nome?.trim()) e.nome = true;
     }
     setErr(e);
     return Object.keys(e).length === 0;
@@ -420,7 +489,7 @@ function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
     if (!validate()) return;
     const out = { ...data };
     if (!out.id) out.id = uid();
-    ["valorAnunciado","valorMinimo","carregoMensal","valorOfertado","valorAprovado"].forEach(k => { if (k in out) out[k] = Number(out[k])||0; });
+    ["valorAnunciado","vendaDireta","valorOfertado","valorAprovado"].forEach(k => { if (k in out) out[k] = Number(out[k])||0; });
     onSave(out);
   }
   const errStyle = k => err[k] ? { ...inputStyle, border:`1px solid ${C.red}` } : inputStyle;
@@ -430,38 +499,27 @@ function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
       <div className="w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl max-h-[92vh] overflow-y-auto scroll-soft" style={{ background:C.card }} onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 sticky top-0 z-10" style={{ background:C.card, borderBottom:`1px solid ${C.line}` }}>
           <h3 className="text-lg font-bold" style={{ color:C.ink }}>{isEdit?"Editar":"Novo"} {titles[type]}</h3>
-          <button onClick={onClose} style={{ color:C.muted }}><Ic.x width={20} height={20}/></button>
+          <button onClick={onClose} title="Fechar" aria-label="Fechar" style={{ color:C.muted }}><Ic.x width={20} height={20}/></button>
         </div>
         <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {type==="imovel" && <>
             <Field label="Código"><input value={data.codigo} onChange={e=>set("codigo",e.target.value)} className={inputCls} style={inputStyle} placeholder="AM-0000"/></Field>
-            <Field label="Nome" required><input value={data.nome} onChange={e=>set("nome",e.target.value)} className={inputCls} style={errStyle("nome")} /></Field>
+            <Field label="Nome do prédio" required><input value={data.nome} onChange={e=>set("nome",e.target.value)} className={inputCls} style={errStyle("nome")} /></Field>
+            <Field label="Proprietário"><TSelect value={data.proprietario||""} onChange={e=>set("proprietario",e.target.value)}><option value="">—</option>{PROPRIETARIOS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
+            <Field label="Unidade"><input value={data.unidade||""} onChange={e=>set("unidade",e.target.value)} className={inputCls} style={inputStyle} placeholder="ex.: 74"/></Field>
+            <Field label="Nome do negócio"><input value={data.nomeNegocio||""} onChange={e=>set("nomeNegocio",e.target.value)} className={inputCls} style={inputStyle} placeholder="Nome do proprietário/vendedor"/></Field>
+            <Field label="Cliente desistente"><input value={data.clienteDesistente||""} onChange={e=>set("clienteDesistente",e.target.value)} className={inputCls} style={inputStyle} placeholder="Nome do cliente que desistiu"/></Field>
+            <div className="md:col-span-2"><Field label="Endereço"><input value={data.endereco||""} onChange={e=>set("endereco",e.target.value)} className={inputCls} style={inputStyle} placeholder="Rua, número"/></Field></div>
             <Field label="Bairro"><input value={data.bairro} onChange={e=>set("bairro",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Região"><input value={data.regiao} onChange={e=>set("regiao",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Data de disponibilização" required><input type="date" value={data.dataDisponibilizacao} onChange={e=>set("dataDisponibilizacao",e.target.value)} className={inputCls} style={errStyle("dataDisponibilizacao")}/></Field>
-            <Field label="Carrego mensal (R$)"><input type="number" value={data.carregoMensal} onChange={e=>set("carregoMensal",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Valor anunciado (R$)" required><input type="number" value={data.valorAnunciado} onChange={e=>set("valorAnunciado",e.target.value)} className={inputCls} style={errStyle("valorAnunciado")}/></Field>
-            <Field label="Valor mínimo (R$)"><input type="number" value={data.valorMinimo} onChange={e=>set("valorMinimo",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Corretor de negócio"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
+            <Field label="Cidade"><input value={data.cidade||""} onChange={e=>set("cidade",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Anúncio (data)"><input type="date" value={data.dataDisponibilizacao} onChange={e=>set("dataDisponibilizacao",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Valor anúncio (R$)"><input type="number" value={data.valorAnunciado} onChange={e=>set("valorAnunciado",e.target.value)} className={inputCls} style={inputStyle}/></Field>
+            <Field label="Venda direta (R$)"><input type="number" value={data.vendaDireta} onChange={e=>set("vendaDireta",e.target.value)} className={inputCls} style={inputStyle}/></Field>
             <Field label="Canal principal"><TSelect value={data.canalPrincipal} onChange={e=>set("canalPrincipal",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
             <Field label="Status"><TSelect value={data.status} onChange={e=>set("status",e.target.value)}>{STATUS_IMOVEL.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
             <Field label="Data proposta aceita"><input type="date" value={data.dataPropostaAceita} onChange={e=>set("dataPropostaAceita",e.target.value)} className={inputCls} style={inputStyle}/></Field>
             <Field label="Data de venda (desembolso)"><input type="date" value={data.dataVenda} onChange={e=>set("dataVenda",e.target.value)} className={inputCls} style={inputStyle}/></Field>
             <div className="md:col-span-2"><Field label="Observações"><TArea value={data.observacoes} onChange={e=>set("observacoes",e.target.value)}/></Field></div>
-          </>}
-          {type==="visita" && <>
-            <Field label="Imóvel" required><TSelect value={data.imovelId} onChange={e=>set("imovelId",e.target.value)} style={errStyle("imovelId")}><option value="">Selecione…</option>{imoveis.map(i=><option key={i.id} value={i.id}>{i.nome}</option>)}</TSelect></Field>
-            <Field label="Data" required><input type="date" value={data.data} onChange={e=>set("data",e.target.value)} className={inputCls} style={errStyle("data")}/></Field>
-            <Field label="Cliente"><input value={data.cliente} onChange={e=>set("cliente",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Canal de origem"><TSelect value={data.canalOrigem} onChange={e=>set("canalOrigem",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
-            <Field label="Corretor"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
-            <Field label="Interesse"><TSelect value={data.interesse} onChange={e=>set("interesse",e.target.value)}>{INTERESSE.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
-            <div className="flex items-center gap-5 md:col-span-2">
-              <label className="flex items-center gap-2 text-[13px] font-medium" style={{color:C.muted}}><input type="checkbox" checked={data.qualificada} onChange={e=>set("qualificada",e.target.checked)} /> Qualificada</label>
-              <label className="flex items-center gap-2 text-[13px] font-medium" style={{color:C.muted}}><input type="checkbox" checked={data.checkin} onChange={e=>set("checkin",e.target.checked)} /> Check-in realizado</label>
-            </div>
-            <div className="md:col-span-2"><Field label="Feedback"><TArea value={data.feedback} onChange={e=>set("feedback",e.target.value)}/></Field></div>
-            <div className="md:col-span-2"><Field label="Próximo passo"><input value={data.proximoPasso} onChange={e=>set("proximoPasso",e.target.value)} className={inputCls} style={inputStyle}/></Field></div>
           </>}
           {type==="proposta" && <>
             <Field label="Imóvel" required><TSelect value={data.imovelId} onChange={e=>set("imovelId",e.target.value)} style={errStyle("imovelId")}><option value="">Selecione…</option>{imoveis.map(i=><option key={i.id} value={i.id}>{i.nome}</option>)}</TSelect></Field>
@@ -469,17 +527,8 @@ function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
             <Field label="Valor ofertado (R$)" required><input type="number" value={data.valorOfertado} onChange={e=>set("valorOfertado",e.target.value)} className={inputCls} style={errStyle("valorOfertado")}/></Field>
             <Field label="Valor aprovado (R$)"><input type="number" value={data.valorAprovado} onChange={e=>set("valorAprovado",e.target.value)} className={inputCls} style={inputStyle}/></Field>
             <Field label="Canal"><TSelect value={data.canal} onChange={e=>set("canal",e.target.value)}>{CANAIS.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
-            <Field label="Corretor"><TSelect value={data.corretorId} onChange={e=>set("corretorId",e.target.value)}><option value="">—</option>{corretores.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</TSelect></Field>
             <Field label="Status"><TSelect value={data.status} onChange={e=>set("status",e.target.value)}>{STATUS_PROPOSTA.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
             <Field label="Motivo da perda"><TSelect value={data.motivoPerda} onChange={e=>set("motivoPerda",e.target.value)}><option value="">—</option>{MOTIVO_PERDA.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
-          </>}
-          {type==="corretor" && <>
-            <Field label="Nome" required><input value={data.nome} onChange={e=>set("nome",e.target.value)} className={inputCls} style={errStyle("nome")}/></Field>
-            <Field label="WhatsApp"><input value={data.whatsapp} onChange={e=>set("whatsapp",e.target.value)} className={inputCls} style={inputStyle} placeholder="(11) 90000-0000"/></Field>
-            <Field label="Região"><input value={data.regiao} onChange={e=>set("regiao",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Especialidade"><input value={data.especialidade} onChange={e=>set("especialidade",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Último contato"><input type="date" value={data.ultimoContato} onChange={e=>set("ultimoContato",e.target.value)} className={inputCls} style={inputStyle}/></Field>
-            <Field label="Status do relacionamento"><TSelect value={data.statusRelacionamento} onChange={e=>set("statusRelacionamento",e.target.value)}>{STATUS_CORRETOR.map(x=><option key={x}>{x}</option>)}</TSelect></Field>
           </>}
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 sticky bottom-0" style={{ background:C.card, borderTop:`1px solid ${C.line}` }}>
@@ -494,27 +543,97 @@ function FormModal({ type, initial, onClose, onSave, imoveis, corretores }) {
 /* ============================ MONTH NAV ============================ */
 function MonthNav({ ym, setYm }) {
   const next = shiftYM(ym, 1);
+  const prev = shiftYM(ym, -1);
   const canForward = startOf(next) <= todayDate();
+  const canBack = prev >= MIN_YM;
   return (
     <div className="flex items-center gap-1 rounded-xl px-1 py-1" style={{ background:C.card, border:`1px solid ${C.line}` }}>
-      <button onClick={()=>setYm(shiftYM(ym,-1))} className="p-1.5 rounded-lg hover:bg-black/5" style={{ color:C.muted }}><Ic.chevL width={18} height={18}/></button>
+      <button onClick={()=>canBack && setYm(prev)} disabled={!canBack} title="Mês anterior" aria-label="Mês anterior" className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed" style={{ color:C.muted }}><Ic.chevL width={18} height={18}/></button>
       <span className="text-[13px] font-semibold px-2 capitalize min-w-[130px] text-center" style={{ color:C.ink }}>{monthLabel(ym)}</span>
-      <button onClick={()=>canForward && setYm(next)} disabled={!canForward} className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed" style={{ color:C.muted }}><Ic.chevR width={18} height={18}/></button>
+      <button onClick={()=>canForward && setYm(next)} disabled={!canForward} title="Próximo mês" aria-label="Próximo mês" className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed" style={{ color:C.muted }}><Ic.chevR width={18} height={18}/></button>
     </div>
   );
 }
 
 /* ============================ PAINEL ============================ */
-function PainelScreen({ imoveis, visitas, propostas, corretores, ref, ym }) {
-  const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, {}, ref, ym), [imoveis,visitas,propostas,ref,ym]);
+function PainelScreen({ imoveis, visitas, propostas, config, refData: ref, ym, anual, setAnual }) {
+  const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, config, ref, ym), [imoveis,visitas,propostas,config,ref,ym]);
   const maxFaixa = Math.max(1, ...M.faixasCounts.map(f=>f.count));
   const totalVis = M.porCanal.QA + M.porCanal.Corretor + M.porCanal.Direto;
+  const A = useMemo(()=>{
+    const months = officialMonths(clampYM(ymOf(todayDate())));
+    const rows = months.map(m => {
+      const mm = calcMetas(imoveis, visitas, propostas, config, refOf(m), m);
+      return { ym:m, visitas:mm.visitasRealizadas, metaVisitas:mm.metaVisitas, propostas:mm.propostasRecebidas, vendas:mm.vendasMes, pctFora:mm.pctFora, bonus:mm.bonusTotal };
+    });
+    const sum = k => rows.reduce((s,r)=>s+r[k],0);
+    return { rows, totVisitas:sum("visitas"), totPropostas:sum("propostas"), totVendas:sum("vendas"), totBonus:sum("bonus") };
+  }, [imoveis,visitas,propostas,config]);
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="flex items-center gap-3">
+        <div className="inline-flex rounded-xl p-1" style={{ background:C.card, border:`1px solid ${C.line}` }}>
+          {[["mes","Mensal"],["ano","Anual"]].map(([k,lab])=>{
+            const active = anual ? k==="ano" : k==="mes";
+            return <button key={k} onClick={()=>setAnual(k==="ano")} className="px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition-colors" style={active?{background:C.petrol,color:"#fff"}:{background:"transparent",color:C.muted}}>{lab}</button>;
+          })}
+        </div>
+        <span className="text-[12px]" style={{color:C.muted}}>{anual ? "Consolidado oficial · maio em diante" : "Visão do mês selecionado"}</span>
+      </div>
+
+      {anual ? (
+      <>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard label="Visitas no ano" value={A.totVisitas} sub="acumulado desde maio" accent={C.petrol} />
+          <StatCard label="Propostas no ano" value={A.totPropostas} sub="acumulado desde maio" accent={C.petrol} />
+          <StatCard label="Vendas no ano" value={A.totVendas} sub="acumulado desde maio" accent={C.green} />
+          <StatCard label="Bônus no ano" value={fmtBRL(A.totBonus)} sub="estimado acumulado" accent={C.amber} />
+        </div>
+        <Card className="p-5">
+          <h3 className="font-bold mb-4" style={{color:C.ink}}>Consolidação mensal</h3>
+          <div className="overflow-x-auto scroll-soft">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr style={{ background:C.bg, color:C.subtle }} className="text-left text-[11px] uppercase tracking-wide">
+                  <th className="px-3 py-2 font-semibold">Mês</th>
+                  <th className="px-3 py-2 font-semibold text-right">Visitas</th>
+                  <th className="px-3 py-2 font-semibold text-right">Propostas</th>
+                  <th className="px-3 py-2 font-semibold text-right">Vendas</th>
+                  <th className="px-3 py-2 font-semibold text-right">% fora QA</th>
+                  <th className="px-3 py-2 font-semibold text-right">Bônus</th>
+                </tr>
+              </thead>
+              <tbody>
+                {A.rows.map(r=>(
+                  <tr key={r.ym} style={{ borderTop:`1px solid ${C.line}` }}>
+                    <td className="px-3 py-2 capitalize font-semibold" style={{color:C.ink}}>{monthLabel(r.ym)}</td>
+                    <td className="px-3 py-2 text-right tabular">{r.visitas} / {r.metaVisitas}</td>
+                    <td className="px-3 py-2 text-right tabular">{r.propostas}</td>
+                    <td className="px-3 py-2 text-right tabular">{r.vendas}</td>
+                    <td className="px-3 py-2 text-right tabular">{r.pctFora}%</td>
+                    <td className="px-3 py-2 text-right tabular font-semibold">{fmtBRL(r.bonus)}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop:`2px solid ${C.line}` }}>
+                  <td className="px-3 py-2 font-bold" style={{color:C.ink}}>Total</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{A.totVisitas}</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{A.totPropostas}</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{A.totVendas}</td>
+                  <td className="px-3 py-2 text-right" style={{color:C.subtle}}>—</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{fmtBRL(A.totBonus)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </>
+      ) : (
+      <>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Estoque ativo" value={M.estoque} sub={`${imoveis.length} imóveis no total`} accent={C.petrol} />
         <StatCard label="Visitas no mês" value={M.visitasRealizadas} sub={`meta ${M.metaVisitas}`} semaphore={M.okVisitas?C.green:C.amber} />
+        <StatCard label="Visitas em fluxo de venda" value={M.visitasFluxo} sub="só em processo de venda ou vendido" accent={C.amber} />
         <StatCard label="Propostas no mês" value={M.propostasRecebidas} sub={`conversão ${M.convVP}% V→P`} semaphore={M.okConversao?C.green:C.amber} />
         <StatCard label="Vendas no mês" value={M.vendasMes} sub={`meta ${M.metaVendas} · ${M.trimestre}`} semaphore={M.okVendas?C.green:C.amber} />
       </div>
@@ -565,8 +684,10 @@ function PainelScreen({ imoveis, visitas, propostas, corretores, ref, ym }) {
           <h3 className="font-bold mb-4" style={{color:C.ink}}>Pipeline da carteira</h3>
           {[
             ["A venda", M.aVenda.length, C.petrol],
+            ["Em processo de venda", M.emProcessoVenda.length, C.amber],
             ["Proposta em andamento", M.propostaAndamento.length, C.amber],
             ["Contrato assinado", M.contratoAssinado.length, C.green],
+            ["Indisponível", M.indisponiveis.length, C.subtle],
             ["Em reforma", M.emReforma.length, C.yellow],
             ["Desembolsados", M.desembolsados.length, C.muted],
           ].map(([label,n,col])=>(
@@ -579,40 +700,85 @@ function PainelScreen({ imoveis, visitas, propostas, corretores, ref, ym }) {
 
         <Card className="p-5">
           <h3 className="font-bold mb-3" style={{color:C.ink}}>Bônus estimado do mês</h3>
-          <div className="text-3xl font-bold tabular" style={{color:C.petrol}}>{fmtBRL(M.bonusTotal)}</div>
-          <div className="mt-3 space-y-1.5 text-[13px]">
-            <div className="flex justify-between"><span style={{color:C.muted}}>Bônus por vendas</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes)}</span></div>
-            <div className="flex justify-between"><span style={{color:C.muted}}>Bônus de funil</span><span className="font-semibold tabular">{fmtBRL(M.bonusFunil)}</span></div>
-            <div className="flex justify-between"><span style={{color:C.muted}}>Multiplicador de budget</span><span className="font-semibold tabular">{M.multiplicador}×</span></div>
+          <div className="flex items-end justify-between gap-4 mb-4">
+            <div>
+              <div className="text-3xl font-bold tabular" style={{color:C.petrol}}>{fmtBRL(M.bonusTotal)}</div>
+              <div className="text-[12px] mt-1" style={{color:C.muted}}>Subtotal vendas + funil</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[12px]" style={{color:C.muted}}>Multiplicador</div>
+              <div className="font-semibold">{M.multiplicador}×</div>
+            </div>
+          </div>
+          <div className="space-y-4 text-[13px]">
+            <div className="rounded-xl border border-[#E7EEF4] bg-[#F8FBFC] p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold" style={{color:C.ink}}>Bônus por vendas</span>
+                <span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes)}</span>
+              </div>
+              {M.compromissosMes.length > 0 ? (
+                <div className="space-y-2">
+                  {M.compromissosMes.map(i => {
+                    const c = calcImovel(i, visitas, propostas, ref, ym);
+                    return (
+                      <div key={i.id} className="flex justify-between text-[13px]" style={{color:C.muted}}>
+                        <span>{i.nome}</span>
+                        <span className="font-semibold tabular">{fmtBRL(c.bonusVenda)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[12px]" style={{color:C.muted}}>Nenhuma venda registrada no mês.</div>
+              )}
+            </div>
+            <div className="rounded-xl border border-[#E7EEF4] bg-[#F8FBFC] p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold" style={{color:C.ink}}>Bônus de funil</span>
+                <span className="font-semibold tabular">{fmtBRL(M.bonusFunil)}</span>
+              </div>
+              {M.itensFunil.filter(it => it.ok).length > 0 ? (
+                <div className="space-y-2">
+                  {M.itensFunil.filter(it => it.ok).map(it => (
+                    <div key={it.label} className="flex justify-between text-[13px]" style={{color:C.muted}}>
+                      <span>{it.label}</span>
+                      <span className="font-semibold tabular">{fmtBRL(it.valor)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[12px]" style={{color:C.muted}}>Nenhum item de funil pago ainda.</div>
+              )}
+            </div>
           </div>
         </Card>
       </div>
+      </>
+      )}
     </div>
   );
 }
 
 /* ============================ REVISÃO ============================ */
-function RevisaoScreen({ imoveis, visitas, propostas, corretores, ref, ym, onEdit }) {
-  const corById = id => corretores.find(c=>c.id===id);
-  const rows = imoveis.filter(i=>i.status==="Disponível").map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
-  const disparo = rows.filter(r=>r.c.necessitaDisparo).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita);
+function RevisaoScreen({ imoveis, visitas, propostas, refData: ref, ym, onEdit }) {
+  const oficial = ym >= OFFICIAL_START;
+  const rows = !oficial ? [] : imoveis.filter(i=>i.status==="Disponível").map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
+  const disparo = rows.filter(r=>r.c.necessitaDisparo).sort((a,b)=>b.c.mesesSemVisita-a.c.mesesSemVisita);
   const revisao = rows.filter(r=>r.c.necessitaRevisao).sort((a,b)=>b.c.diasSemProposta-a.c.diasSemProposta);
-  const atencao = rows.filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita);
+  const atencao = rows.filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.mesesSemVisita-a.c.mesesSemVisita);
 
   function waMsg(im) {
-    const lo = fmtBRL(im.valorMinimo);
-    const hi = fmtBRL(im.valorAnunciado);
-    return `Olá! Temos uma oportunidade no ${im.nome}${im.bairro?` (${im.bairro})`:""}. Faixa de negociação entre ${lo} e ${hi}. Posso agendar uma visita com seu cliente?`;
+    const anuncio = im.valorAnunciado ? fmtBRL(im.valorAnunciado) : null;
+    const vd = im.vendaDireta ? fmtBRL(im.vendaDireta) : null;
+    const valores = anuncio ? ` Valor de anúncio ${anuncio}${vd?` (venda direta ${vd})`:""}.` : "";
+    return `Olá! Temos uma oportunidade no ${im.nome}${im.bairro?` (${im.bairro})`:""}.${valores} Posso agendar uma visita com seu cliente?`;
   }
   function copyMsg(im) {
     const txt = waMsg(im);
     navigator.clipboard?.writeText(txt).catch(()=>{});
   }
   function waLink(im) {
-    const c = corById(im.corretorId);
-    const phone = (c?.whatsapp||"").replace(/\D/g,"");
-    const base = phone ? `https://wa.me/55${phone}` : `https://wa.me/`;
-    return `${base}?text=${encodeURIComponent(waMsg(im))}`;
+    return `https://wa.me/?text=${encodeURIComponent(waMsg(im))}`;
   }
 
   function Section({ title, list, color, kind }) {
@@ -626,24 +792,24 @@ function RevisaoScreen({ imoveis, visitas, propostas, corretores, ref, ym, onEdi
         {list.length===0 ? <EmptyState icon={<Ic.target width={20} height={20}/>} title="Tudo em dia" hint="Nenhum imóvel nesta condição agora." /> :
         <div className="space-y-3">
           {list.map(({im,c})=>{
-            const cor = corById(im.corretorId);
             return (
               <div key={im.id} className="rounded-xl p-3.5" style={{ border:`1px solid ${C.line}`, background:"#FBFCFD" }}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-semibold truncate" style={{color:C.ink}}>{im.nome}</div>
-                    <div className="text-[12px]" style={{color:C.muted}}>{im.bairro} · {im.regiao} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
+                    <div className="text-[12px]" style={{color:C.muted}}>{[im.bairro, im.cidade].filter(Boolean).join(" · ")} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
                   </div>
-                  <button onClick={()=>onEdit(im)} className="p-1.5 rounded-lg hover:bg-black/5 shrink-0" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                  <button onClick={()=>onEdit(im)} title="Editar imóvel" aria-label="Editar imóvel" className="p-1.5 rounded-lg hover:bg-black/5 shrink-0" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
                 </div>
                 <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12px]" style={{color:C.muted}}>
-                  <span>{kind==="revisao" ? `Sem proposta há ${c.diasSemProposta}d` : `Sem visita há ${c.diasSemVisita}d`}</span>
+                  <span>{kind==="revisao" ? `Sem proposta há ${c.diasSemProposta}d` : (c.mesesSemVisita>=1 ? `Sem visita há ${c.mesesSemVisita} ${c.mesesSemVisita===1?'mês':'meses'}` : 'Sem visita no mês')}</span>
                   <span>Mercado: {c.mercadoMeses}m</span>
-                  <span>Carrego acum.: {fmtBRL(c.carregoAcum)}</span>
-                  <span>Faixa: {fmtBRL(im.valorMinimo)} – {fmtBRL(im.valorAnunciado)}</span>
+                  {im.valorAnunciado>0 && <span>Anúncio: {fmtBRL(im.valorAnunciado)}</span>}
+                  {im.vendaDireta>0 && <span>Venda direta: {fmtBRL(im.vendaDireta)}</span>}
+                  {im.clienteDesistente && <span>Cliente desistente: {im.clienteDesistente}</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <a href={waLink(im)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.greenLight, color:C.green}}><Ic.wa width={14} height={14}/> {cor?`WhatsApp ${cor.nome.split(" ")[0]}`:"WhatsApp"}</a>
+                  <a href={waLink(im)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.greenLight, color:C.green}}><Ic.wa width={14} height={14}/> WhatsApp</a>
                   <button onClick={()=>copyMsg(im)} className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.petrolLight, color:C.petrol}}><Ic.copy width={14} height={14}/> Copiar mensagem</button>
                 </div>
               </div>
@@ -660,30 +826,31 @@ function RevisaoScreen({ imoveis, visitas, propostas, corretores, ref, ym, onEdi
         <div className="flex items-start gap-3">
           <Ic.alert width={20} height={20} style={{color:C.petrol}} />
           <div className="text-[13px]" style={{color:C.petrolDark}}>
-            <b>Rotina de revisão.</b> Disparo de leads quando passa de 30 dias sem visita. Revisão de preço quando passa de 45 dias sem proposta. Atenção máxima acima de 60 dias.
+            <b>Rotina de revisão.</b> Disparo de leads para imóveis sem visita no mês. Revisão de preço quando passa de 45 dias sem proposta. Atenção máxima: 2+ meses sem visita ou 60 dias sem proposta.
           </div>
         </div>
       </Card>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-        <Section title="Necessita disparo (>30d sem visita)" list={disparo} color={C.yellow} kind="disparo" />
+        <Section title="Necessita disparo (sem visita no mês)" list={disparo} color={C.yellow} kind="disparo" />
         <Section title="Necessita revisão de preço (>45d sem proposta)" list={revisao} color={C.amber} kind="revisao" />
-        <Section title="Atenção máxima (>60d)" list={atencao} color={C.red} kind="disparo" />
+        <Section title="Atenção máxima (2+ meses s/ visita)" list={atencao} color={C.red} kind="disparo" />
       </div>
     </div>
   );
 }
 
 /* ============================ IMÓVEIS ============================ */
-function ImoveisScreen({ imoveis, visitas, propostas, corretores, ref, ym, onNew, onEdit, onDelete }) {
+function ImoveisScreen({ imoveis, visitas, propostas, refData: ref, ym, onNew, onEdit, onDelete }) {
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState("");
-  const [fRegiao, setFRegiao] = useState("");
-  const corById = id => corretores.find(c=>c.id===id);
-  const regioes = [...new Set(imoveis.map(i=>i.regiao).filter(Boolean))].sort();
+  const [fCidade, setFCidade] = useState("");
+  const [fProp, setFProp] = useState("");
+  const cidades = [...new Set(imoveis.map(i=>i.cidade).filter(Boolean))].sort();
   const list = imoveis.filter(i=>{
     if (fStatus && i.status!==fStatus) return false;
-    if (fRegiao && i.regiao!==fRegiao) return false;
-    if (q) { const s=(i.nome+" "+i.bairro+" "+i.codigo).toLowerCase(); if(!s.includes(q.toLowerCase())) return false; }
+    if (fCidade && i.cidade!==fCidade) return false;
+    if (fProp && i.proprietario!==fProp) return false;
+    if (q) { const s=(i.nome+" "+(i.bairro||"")+" "+(i.cidade||"")+" "+i.codigo+" "+(i.clienteDesistente||"")+" "+(i.nomeNegocio||"")+" "+(i.endereco||"")).toLowerCase(); if(!s.includes(q.toLowerCase())) return false; }
     return true;
   }).map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
 
@@ -692,10 +859,11 @@ function ImoveisScreen({ imoveis, visitas, propostas, corretores, ref, ym, onNew
       <div className="flex flex-col md:flex-row md:items-center gap-3">
         <div className="relative flex-1">
           <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome, bairro ou código…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome, bairro, cidade, código ou cliente…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
         </div>
         <TSelect value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos os status</option>{STATUS_IMOVEL.map(x=><option key={x}>{x}</option>)}</TSelect>
-        <TSelect value={fRegiao} onChange={e=>setFRegiao(e.target.value)}><option value="">Todas as regiões</option>{regioes.map(x=><option key={x}>{x}</option>)}</TSelect>
+        <TSelect value={fProp} onChange={e=>setFProp(e.target.value)}><option value="">Todos os proprietários</option>{PROPRIETARIOS.map(x=><option key={x}>{x}</option>)}</TSelect>
+        <TSelect value={fCidade} onChange={e=>setFCidade(e.target.value)}><option value="">Todas as cidades</option>{cidades.map(x=><option key={x}>{x}</option>)}</TSelect>
         <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Novo imóvel</Btn>
       </div>
 
@@ -709,36 +877,37 @@ function ImoveisScreen({ imoveis, visitas, propostas, corretores, ref, ym, onNew
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold text-right">Anunciado</th>
                 <th className="px-4 py-3 font-semibold text-center">Mercado</th>
-                <th className="px-4 py-3 font-semibold text-right">Carrego acum.</th>
                 <th className="px-4 py-3 font-semibold text-center">Saúde</th>
-                <th className="px-4 py-3 font-semibold">Corretor</th>
+                <th className="px-4 py-3 font-semibold">Cliente desistente</th>
                 <th className="px-4 py-3 font-semibold text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
               {list.map(({im,c})=>{
-                const cor = corById(im.corretorId);
                 return (
                   <tr key={im.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
                     <td className="px-4 py-3">
-                      <div className="font-semibold" style={{color:C.ink}}>{im.nome}</div>
-                      <div className="text-[12px]" style={{color:C.muted}}>{im.bairro} · {im.regiao} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold" style={{color:C.ink}}>{im.nome}</span>
+                        {im.proprietario && <Badge bg={C.petrolLight} fg={C.petrol}>{im.proprietario}</Badge>}
+                      </div>
+                      <div className="text-[12px]" style={{color:C.muted}}>{[im.bairro, im.cidade].filter(Boolean).join(" · ")}{im.unidade?` · Un. ${im.unidade}`:""} · <span style={{fontFamily:mono}}>{im.codigo}</span></div>
+                      {im.endereco && <div className="text-[11px]" style={{color:C.subtle}}>{im.endereco}</div>}
                     </td>
                     <td className="px-4 py-3">{statusImovelBadge(im.status)}</td>
-                    <td className="px-4 py-3 text-right tabular font-semibold">{fmtBRL(im.valorAnunciado)}</td>
+                    <td className="px-4 py-3 text-right tabular font-semibold">{im.valorAnunciado ? fmtBRL(im.valorAnunciado) : "—"}</td>
                     <td className="px-4 py-3 text-center tabular" style={{color:C.muted}}>{c.mercadoMeses}m</td>
-                    <td className="px-4 py-3 text-right tabular" style={{color:C.muted}}>{fmtBRL(c.carregoAcum)}</td>
                     <td className="px-4 py-3 text-center">
                       <div className="inline-flex flex-col items-center gap-0.5">
                         <Dot color={saudeColor(c.saude)} />
-                        {im.status==="Disponível" && <span className="text-[10px] tabular" style={{color:C.subtle}}>{c.diasSemVisita}d</span>}
+                        {im.status==="Disponível" && <span className="text-[10px]" style={{color:C.subtle}}>{c.saude==="neutro" ? "—" : c.atencaoMaxima ? "atenção máx." : c.necessitaDisparo ? "disparo" : c.necessitaRevisao ? "revisar preço" : "em dia"}</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{cor?cor.nome:"—"}</td>
+                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{im.clienteDesistente||"—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={()=>onEdit(im)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
-                        <button onClick={()=>onDelete(im.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+                        <button onClick={()=>onEdit(im)} title="Editar imóvel" aria-label="Editar imóvel" className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                        <button onClick={()=>onDelete(im.id)} title="Excluir imóvel" aria-label="Excluir imóvel" className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
                       </div>
                     </td>
                   </tr>
@@ -753,65 +922,81 @@ function ImoveisScreen({ imoveis, visitas, propostas, corretores, ref, ym, onNew
 }
 
 /* ============================ VISITAS ============================ */
-function VisitasScreen({ imoveis, visitas, corretores, onNew, onEdit, onDelete }) {
+function VisitasScreen({ imoveis, visitas, ym, setVisitaCount }) {
   const [q, setQ] = useState("");
-  const imById = id => imoveis.find(i=>i.id===id);
-  const corById = id => corretores.find(c=>c.id===id);
-  const list = [...visitas].sort((a,b)=>parseDate(b.data)-parseDate(a.data)).filter(v=>{
-    if(!q) return true;
-    const im = imById(v.imovelId);
-    const s = ((im?.nome||"")+" "+(v.cliente||"")+" "+v.canalOrigem).toLowerCase();
-    return s.includes(q.toLowerCase());
-  });
-  const interesseColor = i => i==="Alto"?C.green:i==="Médio"?C.yellow:i==="Baixo"?C.amber:C.subtle;
+  const oficial = ym >= OFFICIAL_START;
+  const rowOf = id => visitas.find(v => v.imovelId===id && v.ym===ym);
+  const sumRow = r => r ? ((Number(r.qa)||0)+(Number(r.corretor)||0)+(Number(r.direto)||0)) : 0;
+  const list = imoveis
+    .filter(i => i.status !== "Vendido" || (i.dataVenda && ym <= i.dataVenda.slice(0,7)))
+    .filter(i => !q || (i.codigo+" "+i.nome+" "+(i.clienteDesistente||"")).toLowerCase().includes(q.toLowerCase()));
+  const tot = canal => list.reduce((s,i)=>s+(Number(rowOf(i.id)?.[canal])||0),0);
+  const totQA = tot("qa"), totCorretor = tot("corretor"), totDireto = tot("direto");
+  const totGeral = totQA + totCorretor + totDireto;
+
+  const numCell = (im, canal) => {
+    const row = rowOf(im.id);
+    return <input type="number" min="0" value={row ? (Number(row[canal])||0) : 0}
+      onChange={e=>setVisitaCount(im.id, ym, canal, e.target.value)}
+      className="w-20 rounded-lg px-2 py-1.5 text-[13px] text-right tabular" style={inputStyle} />;
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center gap-3">
-        <div className="relative flex-1">
-          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por imóvel, cliente ou canal…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
+      <Card className="p-4" style={{ background:C.petrolLight, border:`1px solid ${C.petrol}33` }}>
+        <div className="flex items-start gap-3">
+          <Ic.eye width={20} height={20} style={{color:C.petrol}} />
+          <div className="text-[13px]" style={{color:C.petrolDark}}>
+            <b>Visitas por imóvel — {monthLabel(ym)}.</b> Informe os números absolutos de visitas do mês por canal (QA, Corretor, Direto). Use o seletor de mês no topo para trocar o período.
+            {!oficial && <span> <b>Atenção:</b> meses anteriores a maio/2026 não entram nos indicadores (controle oficial a partir de maio).</span>}
+          </div>
         </div>
-        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Nova visita</Btn>
+      </Card>
+
+      <div className="relative">
+        <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por código, imóvel ou cliente desistente…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
       </div>
+
       <Card className="overflow-hidden">
-        {list.length===0 ? <EmptyState icon={<Ic.eye width={20} height={20}/>} title="Nenhuma visita registrada" hint="Registre as visitas para acompanhar o funil." /> :
+        {list.length===0 ? <EmptyState icon={<Ic.home width={20} height={20}/>} title="Nenhum imóvel" hint="Cadastre imóveis na aba Imóveis para registrar visitas." /> :
         <div className="overflow-x-auto scroll-soft">
           <table className="w-full text-[13px]">
             <thead>
               <tr style={{ background:C.bg, color:C.subtle }} className="text-left text-[11px] uppercase tracking-wide">
-                <th className="px-4 py-3 font-semibold">Data</th>
                 <th className="px-4 py-3 font-semibold">Imóvel</th>
-                <th className="px-4 py-3 font-semibold">Cliente</th>
-                <th className="px-4 py-3 font-semibold">Canal</th>
-                <th className="px-4 py-3 font-semibold text-center">Qual.</th>
-                <th className="px-4 py-3 font-semibold text-center">Interesse</th>
-                <th className="px-4 py-3 font-semibold">Corretor</th>
-                <th className="px-4 py-3 font-semibold text-right">Ações</th>
+                <th className="px-4 py-3 font-semibold text-center">QA</th>
+                <th className="px-4 py-3 font-semibold text-center">Corretor</th>
+                <th className="px-4 py-3 font-semibold text-center">Direto</th>
+                <th className="px-4 py-3 font-semibold text-right">Total</th>
               </tr>
             </thead>
             <tbody>
-              {list.map(v=>{
-                const im = imById(v.imovelId); const cor = corById(v.corretorId);
+              {list.map(im=>{
+                const total = sumRow(rowOf(im.id));
                 return (
-                  <tr key={v.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
-                    <td className="px-4 py-3 tabular" style={{color:C.muted}}>{parseDate(v.data)?.toLocaleDateString("pt-BR")}</td>
-                    <td className="px-4 py-3 font-semibold" style={{color:C.ink}}>{im?im.nome:"—"}</td>
-                    <td className="px-4 py-3" style={{color:C.muted}}>{v.cliente||"—"}</td>
-                    <td className="px-4 py-3"><Badge bg={C.petrolLight} fg={C.petrol}>{v.canalOrigem}</Badge></td>
-                    <td className="px-4 py-3 text-center">{v.qualificada?<span style={{color:C.green}}>✓</span>:<span style={{color:C.subtle}}>—</span>}</td>
-                    <td className="px-4 py-3 text-center"><span className="inline-flex items-center gap-1.5 text-[12px]" style={{color:C.muted}}><Dot color={interesseColor(v.interesse)}/>{v.interesse}</span></td>
-                    <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{cor?cor.nome:"—"}</td>
+                  <tr key={im.id} className="transition-colors hover:bg-black/[.025]" style={{ borderTop:`1px solid ${C.line}` }}>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button onClick={()=>onEdit(v)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
-                        <button onClick={()=>onDelete(v.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
-                      </div>
+                      <div className="font-semibold" style={{color:C.ink}}><span style={{fontFamily:mono}}>{im.codigo}</span> · {im.nome}</div>
+                      <div className="text-[12px]" style={{color:C.muted}}>{im.clienteDesistente ? `Cliente desistente: ${im.clienteDesistente}` : (im.bairro||"—")}</div>
                     </td>
+                    <td className="px-4 py-3 text-center">{numCell(im,"qa")}</td>
+                    <td className="px-4 py-3 text-center">{numCell(im,"corretor")}</td>
+                    <td className="px-4 py-3 text-center">{numCell(im,"direto")}</td>
+                    <td className="px-4 py-3 text-right tabular font-bold" style={{color:C.ink}}>{total}</td>
                   </tr>
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr style={{ borderTop:`2px solid ${C.line}`, background:C.bg }}>
+                <td className="px-4 py-3 font-bold" style={{color:C.ink}}>Total do mês</td>
+                <td className="px-4 py-3 text-center tabular font-bold" style={{color:C.ink}}>{totQA}</td>
+                <td className="px-4 py-3 text-center tabular font-bold" style={{color:C.ink}}>{totCorretor}</td>
+                <td className="px-4 py-3 text-center tabular font-bold" style={{color:C.ink}}>{totDireto}</td>
+                <td className="px-4 py-3 text-right tabular font-bold" style={{color:C.petrol}}>{totGeral}</td>
+              </tr>
+            </tfoot>
           </table>
         </div>}
       </Card>
@@ -820,10 +1005,9 @@ function VisitasScreen({ imoveis, visitas, corretores, onNew, onEdit, onDelete }
 }
 
 /* ============================ PROPOSTAS ============================ */
-function PropostasScreen({ imoveis, propostas, corretores, onNew, onEdit, onDelete }) {
+function PropostasScreen({ imoveis, propostas, onNew, onEdit, onDelete }) {
   const [q, setQ] = useState("");
   const imById = id => imoveis.find(i=>i.id===id);
-  const corById = id => corretores.find(c=>c.id===id);
   const list = [...propostas].sort((a,b)=>parseDate(b.data)-parseDate(a.data)).filter(p=>{
     if(!q) return true;
     const im = imById(p.imovelId);
@@ -869,8 +1053,8 @@ function PropostasScreen({ imoveis, propostas, corretores, onNew, onEdit, onDele
                     <td className="px-4 py-3 text-[12px]" style={{color:C.muted}}>{p.motivoPerda||"—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={()=>onEdit(p)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
-                        <button onClick={()=>onDelete(p.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
+                        <button onClick={()=>onEdit(p)} title="Editar proposta" aria-label="Editar proposta" className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
+                        <button onClick={()=>onDelete(p.id)} title="Excluir proposta" aria-label="Excluir proposta" className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
                       </div>
                     </td>
                   </tr>
@@ -884,79 +1068,12 @@ function PropostasScreen({ imoveis, propostas, corretores, onNew, onEdit, onDele
   );
 }
 
-/* ============================ CORRETORES ============================ */
-function CorretoresScreen({ corretores, imoveis, visitas, propostas, onNew, onEdit, onDelete }) {
-  const [q, setQ] = useState("");
-  const ranking = corretores.map(c=>{
-    const vis = visitas.filter(v=>v.corretorId===c.id).length;
-    const props = propostas.filter(p=>p.corretorId===c.id).length;
-    const aceitas = propostas.filter(p=>p.corretorId===c.id && (p.status==="Aceita"||p.status==="Convertida em venda")).length;
-    const imc = imoveis.filter(i=>i.corretorId===c.id).length;
-    const score = vis*1 + props*3 + aceitas*5;
-    return { c, vis, props, aceitas, imc, score };
-  }).sort((a,b)=>b.score-a.score);
-  const list = ranking.filter(r=> !q || (r.c.nome+" "+r.c.regiao+" "+r.c.especialidade).toLowerCase().includes(q.toLowerCase()));
-  const medals = ["🥇","🥈","🥉"];
-
-  function waLink(c) {
-    const phone=(c.whatsapp||"").replace(/\D/g,"");
-    return phone?`https://wa.me/55${phone}`:`https://wa.me/`;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center gap-3">
-        <div className="relative flex-1">
-          <Ic.search width={16} height={16} style={{ position:"absolute", left:12, top:11, color:C.subtle }} />
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar corretor…" className="w-full rounded-lg pl-9 pr-3 py-2.5 text-[13px]" style={inputStyle} />
-        </div>
-        <Btn onClick={onNew}><Ic.plus width={16} height={16}/> Novo corretor</Btn>
-      </div>
-      {list.length===0 ? <Card><EmptyState icon={<Ic.users width={20} height={20}/>} title="Nenhum corretor" hint="Cadastre corretores parceiros para acompanhar o relacionamento." /></Card> :
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {list.map((r, idx)=>(
-          <Card key={r.c.id} className="p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                {ranking.indexOf(r)<3 && r.score>0 && <span className="text-lg">{medals[ranking.indexOf(r)]}</span>}
-                <div className="min-w-0">
-                  <div className="font-bold truncate" style={{color:C.ink}}>{r.c.nome}</div>
-                  <div className="text-[12px]" style={{color:C.muted}}>{r.c.regiao||"—"}{r.c.especialidade?` · ${r.c.especialidade}`:""}</div>
-                </div>
-              </div>
-              {corretorBadge(r.c.statusRelacionamento)}
-            </div>
-            <div className="grid grid-cols-4 gap-2 mt-4 text-center">
-              {[["Imóveis",r.imc],["Visitas",r.vis],["Propostas",r.props],["Aceitas",r.aceitas]].map(([l,n])=>(
-                <div key={l} className="rounded-lg py-2" style={{background:C.bg}}>
-                  <div className="text-lg font-bold tabular" style={{color:C.ink}}>{n}</div>
-                  <div className="text-[10px] uppercase tracking-wide" style={{color:C.subtle}}>{l}</div>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between mt-3 text-[12px]" style={{color:C.muted}}>
-              <span>Último contato: {r.c.ultimoContato?parseDate(r.c.ultimoContato)?.toLocaleDateString("pt-BR"):"—"}</span>
-              <span className="font-semibold" style={{color:C.petrol}}>score {r.score}</span>
-            </div>
-            <div className="flex items-center gap-2 mt-3">
-              <a href={waLink(r.c)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1.5 rounded-lg" style={{background:C.greenLight, color:C.green}}><Ic.wa width={14} height={14}/> WhatsApp</a>
-              <div className="flex-1"/>
-              <button onClick={()=>onEdit(r.c)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.muted}}><Ic.edit width={16} height={16}/></button>
-              <button onClick={()=>onDelete(r.c.id)} className="p-1.5 rounded-lg hover:bg-black/5" style={{color:C.red}}><Ic.trash width={16} height={16}/></button>
-            </div>
-          </Card>
-        ))}
-      </div>}
-    </div>
-  );
-}
-
 /* ============================ METAS ============================ */
-function MetasScreen({ imoveis, visitas, propostas, config, setConfig, ref, ym }) {
+function MetasScreen({ imoveis, visitas, propostas, config, setConfig, refData: ref, ym }) {
   const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, config, ref, ym), [imoveis,visitas,propostas,config,ref,ym]);
   const set = (k,v) => setConfig(c=>({ ...c, [k]:v }));
-  const budgetPct = M.budget>0 ? Math.round(M.custoCalc/M.budget*100) : 0;
-  const budgetColor = M.multiplicador===1?C.green:M.multiplicador===0.5?C.yellow:C.red;
+  const travaPct = M.orcamentoTri>0 ? Math.round(M.custoOpTri/M.orcamentoTri*100) : 0;
+  const travaColor = M.multiplicador===1?C.green:M.multiplicador===0.5?C.yellow:C.red;
 
   return (
     <div className="space-y-5">
@@ -964,33 +1081,35 @@ function MetasScreen({ imoveis, visitas, propostas, config, setConfig, ref, ym }
         <h3 className="font-bold mb-4" style={{color:C.ink}}>Configuração do programa</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Field label="Mês do programa"><TInput type="number" min="1" value={config.mesPrograma||1} onChange={e=>set("mesPrograma",e.target.value)} /></Field>
-          <Field label="Budget mensal de carrego (R$)"><TInput type="number" value={config.budgetMes||0} onChange={e=>set("budgetMes",e.target.value)} /></Field>
-          <div className="flex items-end">
-            <div className="text-[12px]" style={{color:C.muted}}>
-              {(M.mesPrograma<=2) ? "Ramp-up: bônus de funil por item cumprido (R$ 500 cada)." : "Maturidade: bônus de funil só com todos os itens cumpridos (R$ 2.000)."}
-            </div>
-          </div>
+          <Field label="Orçamento operacional do trimestre (R$)"><TInput type="number" value={config.orcamentoTrimestre||0} onChange={e=>set("orcamentoTrimestre",e.target.value)} /></Field>
+          <Field label="Custo operacional do trimestre (R$)"><TInput type="number" value={config.custoOperacionalTrimestre||0} onChange={e=>set("custoOperacionalTrimestre",e.target.value)} /></Field>
+        </div>
+        <div className="text-[12px] mt-3" style={{color:C.muted}}>
+          {(M.mesPrograma<=2) ? "Ramp-up: bônus de funil por item cumprido (R$ 500 cada)." : "Maturidade: bônus de funil só com todos os itens cumpridos (R$ 2.000)."}
+          {" "}O custo operacional (bônus de corretores + fotos + reformas) vs. orçamento define o multiplicador da trava.
         </div>
       </Card>
 
-      <Card className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold" style={{color:C.ink}}>Carrego vs Budget</h3>
-          <Badge bg={`${budgetColor}1A`} fg={budgetColor}>multiplicador {M.multiplicador}×</Badge>
-        </div>
-        <div className="flex items-end justify-between mb-2">
-          <div><div className="text-[12px]" style={{color:C.subtle}}>Carrego mensal (ativos)</div><div className="text-2xl font-bold tabular" style={{color:C.ink}}>{fmtBRL(M.custoCalc)}</div></div>
-          <div className="text-right"><div className="text-[12px]" style={{color:C.subtle}}>Budget</div><div className="text-lg font-semibold tabular" style={{color:C.muted}}>{fmtBRL(M.budget)}</div></div>
-        </div>
-        <div className="w-full rounded-full h-4 overflow-hidden relative" style={{ background:C.line }}>
-          <div className="h-full rounded-full transition-all" style={{ width:`${Math.min(100,budgetPct)}%`, background:budgetColor }} />
-          {M.budget>0 && <div className="absolute top-0 bottom-0" style={{ left:"83.3%", width:2, background:C.muted }} title="120%" />}
-        </div>
-        <div className="flex justify-between mt-1.5 text-[11px]" style={{color:C.subtle}}>
-          <span>{budgetPct}% do budget</span>
-          <span>limite 120% (linha)</span>
-        </div>
-      </Card>
+      <div>
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold" style={{color:C.ink}}>Trava de eficiência (trimestral)</h3>
+            <Badge bg={`${travaColor}1A`} fg={travaColor}>multiplicador {M.multiplicador}×</Badge>
+          </div>
+          <div className="flex items-end justify-between mb-2">
+            <div><div className="text-[12px]" style={{color:C.subtle}}>Custo operacional (trimestre)</div><div className="text-2xl font-bold tabular" style={{color:C.ink}}>{fmtBRL(M.custoOpTri)}</div></div>
+            <div className="text-right"><div className="text-[12px]" style={{color:C.subtle}}>Orçamento</div><div className="text-lg font-semibold tabular" style={{color:C.muted}}>{fmtBRL(M.orcamentoTri)}</div></div>
+          </div>
+          <div className="w-full rounded-full h-4 overflow-hidden relative" style={{ background:C.line }}>
+            <div className="h-full rounded-full transition-all" style={{ width:`${Math.min(100,travaPct)}%`, background:travaColor }} />
+            {M.orcamentoTri>0 && <div className="absolute top-0 bottom-0" style={{ left:"83.3%", width:2, background:C.muted }} title="120%" />}
+          </div>
+          <div className="flex justify-between mt-1.5 text-[11px]" style={{color:C.subtle}}>
+            <span>{travaPct}% do orçamento</span>
+            <span>até 100% → ×1 · até 120% → ×0,5 · acima → ×0</span>
+          </div>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card className="p-5">
@@ -1018,7 +1137,7 @@ function MetasScreen({ imoveis, visitas, propostas, config, setConfig, ref, ym }
             <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Bônus por vendas ({M.vendasMes})</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes)}</span></div>
             <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Bônus de funil</span><span className="font-semibold tabular">{fmtBRL(M.bonusFunil)}</span></div>
             <div className="flex justify-between py-2 text-[13px]" style={{borderBottom:`1px solid ${C.line}`}}><span style={{color:C.muted}}>Subtotal</span><span className="font-semibold tabular">{fmtBRL(M.bonusVendasMes+M.bonusFunil)}</span></div>
-            <div className="flex justify-between py-2 text-[13px]"><span style={{color:C.muted}}>Multiplicador de budget</span><span className="font-semibold tabular">× {M.multiplicador}</span></div>
+            <div className="flex justify-between py-2 text-[13px]"><span style={{color:C.muted}}>Multiplicador (trava trimestral)</span><span className="font-semibold tabular">× {M.multiplicador}</span></div>
           </div>
         </Card>
       </div>
@@ -1047,11 +1166,11 @@ function MetasScreen({ imoveis, visitas, propostas, config, setConfig, ref, ym }
 }
 
 /* ============================ RELATÓRIO ============================ */
-function RelatorioScreen({ imoveis, visitas, propostas, corretores, config, ref, ym }) {
+function RelatorioScreen({ imoveis, visitas, propostas, config, refData: ref, ym }) {
   const M = useMemo(()=>calcMetas(imoveis, visitas, propostas, config, ref, ym), [imoveis,visitas,propostas,config,ref,ym]);
-  const corById = id => corretores.find(c=>c.id===id);
+  const oficial = ym >= OFFICIAL_START;
   const vendas = M.compromissosMes.map(i=>({ im:i, c:calcImovel(i,visitas,propostas,ref,ym) }));
-  const destaques = imoveis.filter(i=>i.status==="Disponível").map(i=>({im:i,c:calcImovel(i,visitas,propostas,ref,ym)})).filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.diasSemVisita-a.c.diasSemVisita).slice(0,5);
+  const destaques = !oficial ? [] : imoveis.filter(i=>i.status==="Disponível").map(i=>({im:i,c:calcImovel(i,visitas,propostas,ref,ym)})).filter(r=>r.c.atencaoMaxima).sort((a,b)=>b.c.mesesSemVisita-a.c.mesesSemVisita).slice(0,5);
 
   return (
     <div className="space-y-5 print-full">
@@ -1090,7 +1209,7 @@ function RelatorioScreen({ imoveis, visitas, propostas, corretores, config, ref,
           ))}
         </div>
 
-        <h4 className="font-bold mb-2" style={{color:C.ink}}>Vendas / compromissos do mês</h4>
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>Vendas / Contrato assinado mês</h4>
         {vendas.length===0 ? <div className="text-[13px] mb-5" style={{color:C.muted}}>Nenhuma venda registrada no mês.</div> :
         <table className="w-full text-[13px] mb-6">
           <thead><tr style={{color:C.subtle}} className="text-left text-[11px] uppercase"><th className="py-2">Imóvel</th><th className="py-2 text-center">Tempo</th><th className="py-2 text-right">Anunciado</th><th className="py-2 text-right">Bônus</th></tr></thead>
@@ -1106,6 +1225,30 @@ function RelatorioScreen({ imoveis, visitas, propostas, corretores, config, ref,
           </tbody>
         </table>}
 
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>Bônus de funil</h4>
+        <p className="text-[12px] mb-2" style={{color:C.muted}}>
+          {M.mesPrograma<=2
+            ? "Ramp-up (meses 1–2 do programa): cada item de funil cumprido no mês paga R$ 500 individualmente."
+            : "Maturidade (mês 3+ do programa): o bônus de funil (R$ 2.000) só é pago quando todos os itens são cumpridos no mês."}
+        </p>
+        <table className="w-full text-[13px] mb-2">
+          <thead><tr style={{color:C.subtle}} className="text-left text-[11px] uppercase"><th className="py-2">Item</th><th className="py-2">Resultado</th><th className="py-2 text-center">Status</th><th className="py-2 text-right">Bônus</th></tr></thead>
+          <tbody>
+            {M.itensFunil.map(it=>(
+              <tr key={it.label} style={{borderTop:`1px solid ${C.line}`}}>
+                <td className="py-2 font-semibold">{it.label}</td>
+                <td className="py-2" style={{color:C.muted}}>{it.detalhe}</td>
+                <td className="py-2 text-center font-semibold" style={{color: it.ok?C.green:C.red}}>{it.ok?"Cumprido":"Não cumprido"}</td>
+                <td className="py-2 text-right tabular font-semibold" style={{color:C.green}}>{fmtBRL(it.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="flex justify-between text-[13px] mb-6 pt-1" style={{borderTop:`1px solid ${C.line}`}}>
+          <span className="font-semibold pt-2" style={{color:C.ink}}>Subtotal funil</span>
+          <span className="font-semibold tabular pt-2" style={{color:C.green}}>{fmtBRL(M.bonusFunil)}</span>
+        </div>
+
         <h4 className="font-bold mb-2" style={{color:C.ink}}>Distribuição do tempo em carteira</h4>
         <div className="space-y-2 mb-6">
           {M.faixasCounts.map(f=>(
@@ -1118,13 +1261,13 @@ function RelatorioScreen({ imoveis, visitas, propostas, corretores, config, ref,
           ))}
         </div>
 
-        <h4 className="font-bold mb-2" style={{color:C.ink}}>{"Atenção máxima (>60d)"}</h4>
+        <h4 className="font-bold mb-2" style={{color:C.ink}}>Atenção máxima</h4>
         {destaques.length===0 ? <div className="text-[13px]" style={{color:C.muted}}>Nenhum imóvel em atenção máxima.</div> :
         <ul className="space-y-1.5">
           {destaques.map(({im,c})=>(
             <li key={im.id} className="flex items-center justify-between text-[13px] rounded-lg px-3 py-2" style={{background:C.redLight}}>
               <span className="font-semibold" style={{color:C.ink}}>{im.nome} <span className="font-normal" style={{color:C.muted}}>· {im.bairro}</span></span>
-              <span className="tabular" style={{color:C.red}}>{c.diasSemVisita}d s/ visita · {c.diasSemProposta}d s/ proposta</span>
+              <span className="tabular" style={{color:C.red}}>{c.mesesSemVisita}m s/ visita · {c.diasSemProposta}d s/ proposta</span>
             </li>
           ))}
         </ul>}
@@ -1142,33 +1285,52 @@ function App() {
   const [imoveis, setImoveis] = useState(()=>loadLS(KEYS.imoveis, null));
   const [visitas, setVisitas] = useState(()=>loadLS(KEYS.visitas, null));
   const [propostas, setPropostas] = useState(()=>loadLS(KEYS.propostas, null));
-  const [corretores, setCorretores] = useState(()=>loadLS(KEYS.corretores, null));
-  const [config, setConfig] = useState(()=>loadLS(KEYS.config, { mesPrograma:2, budgetMes:55000 }));
+  const [config, setConfig] = useState(()=>loadLS(KEYS.config, { mesPrograma:2, orcamentoTrimestre:50000, custoOperacionalTrimestre:0 }));
 
-  // seed once
+  // seed once / migra dados antigos
   useEffect(()=>{
-    if (imoveis===null || visitas===null || propostas===null || corretores===null) {
+    if (imoveis===null || visitas===null || propostas===null) {
       const s = makeSeed();
-      setImoveis(s.imoveis); setVisitas(s.visitas); setPropostas(s.propostas); setCorretores(s.corretores);
+      setImoveis(s.imoveis); setVisitas(s.visitas); setPropostas(s.propostas);
+      return;
+    }
+    // migração: o antigo "corretor de negócio" passa a ser o cliente desistente do imóvel
+    if (imoveis.some(i => i.clienteDesistente===undefined)) {
+      const oldCor = loadLS(`amora:${VER}:corretores`, []);
+      const nomeById = id => (oldCor.find(c=>c.id===id)||{}).nome || "";
+      setImoveis(imoveis.map(i => i.clienteDesistente!==undefined ? i : ({ ...i, clienteDesistente: nomeById(i.corretorId) })));
+    }
+    // migração: visitas individuais (com data/canalOrigem) -> contagens por imóvel/mês/canal
+    if (visitas.length && visitas.some(v => v.ym===undefined)) {
+      const agg = {};
+      visitas.forEach(v => {
+        if (!v.data) return;
+        const y = String(v.data).slice(0,7);
+        const key = v.imovelId+"|"+y;
+        if (!agg[key]) agg[key] = { imovelId: v.imovelId, ym: y, qa: 0, corretor: 0, direto: 0 };
+        const ck = v.canalOrigem==="Corretor" ? "corretor" : v.canalOrigem==="Direto" ? "direto" : "qa";
+        agg[key][ck]++;
+      });
+      setVisitas(Object.values(agg));
     }
   }, []);
 
-  const I = imoveis||[], V = visitas||[], P = propostas||[], Cor = corretores||[];
+  const I = imoveis||[], V = visitas||[], P = propostas||[];
 
   // persist
   useEffect(()=>{ if(imoveis) saveLS(KEYS.imoveis, imoveis); }, [imoveis]);
   useEffect(()=>{ if(visitas) saveLS(KEYS.visitas, visitas); }, [visitas]);
   useEffect(()=>{ if(propostas) saveLS(KEYS.propostas, propostas); }, [propostas]);
-  useEffect(()=>{ if(corretores) saveLS(KEYS.corretores, corretores); }, [corretores]);
   useEffect(()=>{ saveLS(KEYS.config, config); }, [config]);
 
   const [tab, setTab] = useState("painel");
-  const [ym, setYm] = useState(()=>ymOf(todayDate()));
+  const [ym, setYm] = useState(()=>clampYM(ymOf(todayDate())));
   const ref = useMemo(()=>refOf(ym), [ym]);
   const [modal, setModal] = useState(null); // { type, initial }
+  const [anual, setAnual] = useState(false);
 
   function upsert(type, item) {
-    const setter = { imovel:setImoveis, visita:setVisitas, proposta:setPropostas, corretor:setCorretores }[type];
+    const setter = { imovel:setImoveis, proposta:setPropostas }[type];
     setter(list => {
       const arr = list||[];
       const exists = arr.some(x=>x.id===item.id);
@@ -1182,15 +1344,45 @@ function App() {
       setImoveis(l=>l.filter(x=>x.id!==id));
       setVisitas(l=>l.filter(x=>x.imovelId!==id));
       setPropostas(l=>l.filter(x=>x.imovelId!==id));
-    } else if (type==="visita") setVisitas(l=>l.filter(x=>x.id!==id));
-    else if (type==="proposta") setPropostas(l=>l.filter(x=>x.id!==id));
-    else if (type==="corretor") setCorretores(l=>l.filter(x=>x.id!==id));
+    } else if (type==="proposta") setPropostas(l=>l.filter(x=>x.id!==id));
   }
-  function resetData() {
-    if (!window.confirm("Restaurar dados de demonstração? Isto substitui os dados atuais.")) return;
-    const s = makeSeed();
-    setImoveis(s.imoveis); setVisitas(s.visitas); setPropostas(s.propostas); setCorretores(s.corretores);
-    setConfig({ mesPrograma:2, budgetMes:55000 });
+  // grade de visitas: contagem absoluta por imóvel/mês/canal
+  function setVisitaCount(imovelId, ymv, canal, valor) {
+    const n = Math.max(0, Math.floor(Number(valor)||0));
+    setVisitas(list => {
+      const arr = list||[];
+      const idx = arr.findIndex(v => v.imovelId===imovelId && v.ym===ymv);
+      if (idx >= 0) { const copy = arr.slice(); copy[idx] = { ...copy[idx], [canal]: n }; return copy; }
+      return [...arr, { imovelId, ym:ymv, qa:0, corretor:0, direto:0, [canal]: n }];
+    });
+  }
+  const fileInputRef = useRef(null);
+  function exportData() {
+    const dump = { ver: VER, exportadoEm: new Date().toISOString(), imoveis: I, visitas: V, propostas: P, config };
+    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `amora-carteira-${ymOf(todayDate())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importData(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // permite reimportar o mesmo arquivo
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d || !Array.isArray(d.imoveis)) throw new Error("formato");
+        if (!window.confirm("Importar substitui todos os dados atuais. Continuar?")) return;
+        setImoveis(d.imoveis);
+        setVisitas(Array.isArray(d.visitas) ? d.visitas : []);
+        setPropostas(Array.isArray(d.propostas) ? d.propostas : []);
+        if (d.config) setConfig(d.config);
+      } catch { window.alert("Arquivo inválido. Selecione um JSON exportado por esta ferramenta."); }
+    };
+    r.readAsText(file);
   }
 
   const tabs = [
@@ -1199,12 +1391,11 @@ function App() {
     ["imoveis","Imóveis",Ic.home],
     ["visitas","Visitas",Ic.eye],
     ["propostas","Propostas",Ic.doc],
-    ["corretores","Corretores",Ic.users],
     ["metas","Metas & Bônus",Ic.target],
     ["relatorio","Relatório",Ic.report],
   ];
 
-  const showMonthNav = ["painel","revisao","imoveis","metas","relatorio"].includes(tab);
+  const showMonthNav = ["revisao","imoveis","visitas","metas","relatorio"].includes(tab) || (tab==="painel" && !anual);
 
   return (
     <div className="min-h-screen" style={{ background:C.bg }}>
@@ -1219,7 +1410,9 @@ function App() {
           </div>
           <div className="flex items-center gap-2">
             {showMonthNav && <MonthNav ym={ym} setYm={setYm} />}
-            <button onClick={resetData} title="Restaurar demonstração" className="p-2 rounded-lg text-white/80 hover:bg-white/10"><Ic.reset width={18} height={18}/></button>
+            <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={importData} className="hidden" />
+            <button onClick={exportData} title="Exportar dados (JSON)" aria-label="Exportar dados" className="p-2 rounded-lg text-white/80 hover:bg-white/10"><Ic.download width={18} height={18}/></button>
+            <button onClick={()=>fileInputRef.current?.click()} title="Importar dados (JSON)" aria-label="Importar dados" className="p-2 rounded-lg text-white/80 hover:bg-white/10"><Ic.upload width={18} height={18}/></button>
           </div>
         </div>
         <nav className="border-t border-white/10">
@@ -1234,17 +1427,16 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
-        {tab==="painel" && <PainelScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} />}
-        {tab==="revisao" && <RevisaoScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} onEdit={im=>setModal({type:"imovel",initial:im})} />}
-        {tab==="imoveis" && <ImoveisScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} ref={ref} ym={ym} onNew={()=>setModal({type:"imovel"})} onEdit={im=>setModal({type:"imovel",initial:im})} onDelete={id=>remove("imovel",id)} />}
-        {tab==="visitas" && <VisitasScreen imoveis={I} visitas={V} corretores={Cor} onNew={()=>setModal({type:"visita"})} onEdit={v=>setModal({type:"visita",initial:v})} onDelete={id=>remove("visita",id)} />}
-        {tab==="propostas" && <PropostasScreen imoveis={I} propostas={P} corretores={Cor} onNew={()=>setModal({type:"proposta"})} onEdit={p=>setModal({type:"proposta",initial:p})} onDelete={id=>remove("proposta",id)} />}
-        {tab==="corretores" && <CorretoresScreen corretores={Cor} imoveis={I} visitas={V} propostas={P} onNew={()=>setModal({type:"corretor"})} onEdit={c=>setModal({type:"corretor",initial:c})} onDelete={id=>remove("corretor",id)} />}
-        {tab==="metas" && <MetasScreen imoveis={I} visitas={V} propostas={P} config={config} setConfig={setConfig} ref={ref} ym={ym} />}
-        {tab==="relatorio" && <RelatorioScreen imoveis={I} visitas={V} propostas={P} corretores={Cor} config={config} ref={ref} ym={ym} />}
+        {tab==="painel" && <PainelScreen imoveis={I} visitas={V} propostas={P} config={config} refData={ref} ym={ym} anual={anual} setAnual={setAnual} />}
+        {tab==="revisao" && <RevisaoScreen imoveis={I} visitas={V} propostas={P} refData={ref} ym={ym} onEdit={im=>setModal({type:"imovel",initial:im})} />}
+        {tab==="imoveis" && <ImoveisScreen imoveis={I} visitas={V} propostas={P} refData={ref} ym={ym} onNew={()=>setModal({type:"imovel"})} onEdit={im=>setModal({type:"imovel",initial:im})} onDelete={id=>remove("imovel",id)} />}
+        {tab==="visitas" && <VisitasScreen imoveis={I} visitas={V} ym={ym} setVisitaCount={setVisitaCount} />}
+        {tab==="propostas" && <PropostasScreen imoveis={I} propostas={P} onNew={()=>setModal({type:"proposta"})} onEdit={p=>setModal({type:"proposta",initial:p})} onDelete={id=>remove("proposta",id)} />}
+        {tab==="metas" && <MetasScreen imoveis={I} visitas={V} propostas={P} config={config} setConfig={setConfig} refData={ref} ym={ym} />}
+        {tab==="relatorio" && <RelatorioScreen imoveis={I} visitas={V} propostas={P} config={config} refData={ref} ym={ym} />}
       </main>
 
-      {modal && <FormModal type={modal.type} initial={modal.initial} imoveis={I} corretores={Cor} onClose={()=>setModal(null)} onSave={item=>upsert(modal.type, item)} />}
+      {modal && <FormModal type={modal.type} initial={modal.initial} imoveis={I} onClose={()=>setModal(null)} onSave={item=>upsert(modal.type, item)} />}
     </div>
   );
 }
